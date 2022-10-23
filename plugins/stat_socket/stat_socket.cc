@@ -258,8 +258,29 @@ public:
   int call_end(Call_Data_t call_info) {
     if (m_open == false)
       return 0;
-    return 0;
-    //send_object(call->get_stats(), "call", "call_end");
+
+    //TODO Factorize this out
+    boost::property_tree::ptree data;
+    data.put("freq", call_info.freq);
+    data.put("talkgroup", call_info.talkgroup);
+    data.put("talkgrouptag", call_info.talkgroup_tag);
+    data.put("startTime", call_info.start_time);
+    data.put("stopTime", call_info.stop_time);
+    data.put("audiofilename", call_info.filename);
+    data.put("statusFilename", call_info.status_filename);
+
+    boost::property_tree::ptree root;
+
+    root.add_child("call", data);
+    root.put("type", "call_end");
+    root.put("instanceId", this->config->instance_id);
+    root.put("instanceKey", this->config->instance_key);
+    std::stringstream stats_str;
+    boost::property_tree::write_json(stats_str, root);
+
+    // std::cout << stats_str;
+    return send_stat(stats_str.str());
+//    return 0;
   }
 
   int send_recorder(Recorder *recorder) {

@@ -14,7 +14,7 @@
 struct Rdio_Scanner_System {
   std::string api_key;
   std::string short_name;
-  std::string system_id;
+  uint32_t    system_id;
   std::string talkgroupsFile;
   Talkgroups *talkgroups;
   bool compress_wav;
@@ -45,7 +45,7 @@ public:
 
   int upload(Call_Data_t call_info) {
     std::string api_key;
-    std::string system_id;
+    uint32_t system_id;
     std::string talkgroup_group = call_info.talkgroup_group;
     std::string talkgroup_tag = call_info.talkgroup_tag;
     std::string talkgroup_alpha_tag = call_info.talkgroup_alpha_tag;
@@ -66,7 +66,7 @@ public:
     if (api_key.size() == 0) {
       return 0;
     }
-    
+
     std::ostringstream freq;
     std::string freq_string;
     freq << std::fixed << std::setprecision(0);
@@ -90,12 +90,8 @@ public:
     boost::filesystem::path audioPath(compress_wav ? call_info.converted : call_info.filename);
     boost::filesystem::path audioName = audioPath.filename();
 
-    char formattedTalkgroup[62];
-    snprintf(formattedTalkgroup, 61, "%c[%dm%10ld%c[0m", 0x1B, 35, call_info.talkgroup, 0x1B);
-    std::string talkgroup_display = boost::lexical_cast<std::string>(formattedTalkgroup);
-
     if (call_info.transmission_source_list.size() != 0) {
-      for (int i = 0; i < call_info.transmission_source_list.size(); i++) {
+      for (unsigned long i = 0; i < call_info.transmission_source_list.size(); i++) {
         source_list << "{ \"pos\": " << std::setprecision(2) << call_info.transmission_source_list[i].position << ", \"src\": " << std::setprecision(0) << call_info.transmission_source_list[i].source << " }";
 
         if (i < (call_info.transmission_source_list.size() - 1)) {
@@ -109,8 +105,8 @@ public:
     }
 
     if (call_info.patched_talkgroups.size()>1){
-      for (int i = 0; i < call_info.patched_talkgroups.size(); i++) {
-        if (i!=0) { 
+      for (unsigned long i = 0; i < call_info.patched_talkgroups.size(); i++) {
+        if (i!=0) {
           patch_list << ",";
         }
         patch_list << (int)call_info.patched_talkgroups[i];
@@ -129,8 +125,8 @@ public:
 
     if (call_info.transmission_error_list.size() != 0) {
       for (std::size_t i = 0; i < call_info.transmission_error_list.size(); i++) {
-          freq_list << "{\"freq\": " << std::fixed << std::setprecision(0) << call_info.freq << ", \"time\": " << call_info.transmission_error_list[i].time << ", \"pos\": " << std::fixed << std::setprecision(2) << call_info.transmission_error_list[i].position << ", \"len\": " << call_info.transmission_error_list[i].total_len  << ", \"errorCount\": " << std::setprecision(0) <<call_info.transmission_error_list[i].error_count << ", \"spikeCount\": " << call_info.transmission_error_list[i].spike_count << "}"; 
-  
+          freq_list << "{\"freq\": " << std::fixed << std::setprecision(0) << call_info.freq << ", \"time\": " << call_info.transmission_error_list[i].time << ", \"pos\": " << std::fixed << std::setprecision(2) << call_info.transmission_error_list[i].position << ", \"len\": " << call_info.transmission_error_list[i].total_len  << ", \"errorCount\": " << std::setprecision(0) <<call_info.transmission_error_list[i].error_count << ", \"spikeCount\": " << call_info.transmission_error_list[i].spike_count << "}";
+
         if (i < (call_info.transmission_error_list.size() - 1)) {
           freq_list << ", ";
         } else {
@@ -250,7 +246,7 @@ public:
     curl_formadd(&formpost,
                  &lastptr,
                  CURLFORM_COPYNAME, "system",
-                 CURLFORM_COPYCONTENTS, system_id.c_str(),
+                 CURLFORM_COPYCONTENTS, std::to_string(system_id).c_str(),
                  CURLFORM_END);
 
     curl_formadd(&formpost,
@@ -364,12 +360,12 @@ public:
         struct stat file_info;
         stat(compress_wav ? call_info.converted : call_info.filename, &file_info);
 
-        BOOST_LOG_TRIVIAL(info) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << talkgroup_display << "\tFreq: " << format_freq(call_info.freq) << "\tRdio Scanner Upload Success - file size: " << file_info.st_size;
+        BOOST_LOG_TRIVIAL(info) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << call_info.talkgroup_display << "\tFreq: " << format_freq(call_info.freq) << "\tRdio Scanner Upload Success - file size: " << file_info.st_size;
         ;
         return 0;
       }
     }
-    BOOST_LOG_TRIVIAL(error) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << talkgroup_display << "\tFreq: " << format_freq(call_info.freq) << "\tRdio Scanner Upload Error: " << response_buffer;
+    BOOST_LOG_TRIVIAL(error) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << call_info.talkgroup_display << "\tFreq: " << format_freq(call_info.freq) << "\tRdio Scanner Upload Error: " << response_buffer;
     return 1;
   }
 
@@ -377,7 +373,7 @@ public:
     return upload(call_info);
   }
 
-  int parse_config(boost::property_tree::ptree &cfg) {
+ int parse_config(json config_data) {
     /*
           system->set_rdioscanner_api_key(node.second.get<std::string>("rdioscannerApiKey", ""));
       BOOST_LOG_TRIVIAL(info) << "Rdio Scanner API Key: " << system->get_rdioscanner_api_key();
@@ -388,12 +384,12 @@ public:
     BOOST_LOG_TRIVIAL(info) << "Rdio Scanner Server: " << config.rdioscanner_server;*/
 
     // Tests to see if the rdioscannerServer value exists in the config file
-    boost::optional<std::string> upload_server_exists = cfg.get_optional<std::string>("server");
+    bool upload_server_exists = config_data.contains("server");
     if (!upload_server_exists) {
       return 1;
     }
 
-    this->data.server = cfg.get<std::string>("server", "");
+    this->data.server = config_data.value("server", "");
     BOOST_LOG_TRIVIAL(info) << "Rdio Scanner Server: " << this->data.server;
 
     // from: http://www.zedwood.com/article/cpp-boost-url-regex
@@ -403,38 +399,30 @@ public:
     if (!regex_match(this->data.server.c_str(), what, ex)) {
       BOOST_LOG_TRIVIAL(error) << "Unable to parse Rdio Scanner Server URL\n";
       return 1;
-    } 
-
-    // Gets the API key for each system, if defined
-    BOOST_FOREACH (boost::property_tree::ptree::value_type &node, cfg.get_child("systems")) {
-      boost::optional<boost::property_tree::ptree &> rdioscanner_exists = node.second.get_child_optional("apiKey");
-      if (rdioscanner_exists) {
-        Rdio_Scanner_System sys;
-
-        sys.api_key = node.second.get<std::string>("apiKey", "");
-        sys.system_id = node.second.get<std::string>("systemId", "");
-        sys.short_name = node.second.get<std::string>("shortName", "");
-        BOOST_LOG_TRIVIAL(info) << "Uploading calls for: " << sys.short_name;
-        this->data.systems.push_back(sys);
-      }
     }
 
-    if (this->data.systems.size() == 0) {
-      BOOST_LOG_TRIVIAL(error) << "Rdio Scanner Server set, but no Systems are configured\n";
-      return 1;
-    }
+        // Gets the API key for each system, if defined
+      for (json element : config_data["systems"]) {
+        bool rdioscanner_exists = element.contains("apiKey");
+       if (rdioscanner_exists) {
+         Rdio_Scanner_System sys;
+
+         sys.api_key = element.value("apiKey", "");
+         sys.system_id = element.value("systemId", 0);
+         sys.short_name = element.value("shortName", "");
+         BOOST_LOG_TRIVIAL(info) << "Uploading calls for: " << sys.short_name;
+         this->data.systems.push_back(sys);
+       }
+     }
+
+     if (this->data.systems.size() == 0) {
+       BOOST_LOG_TRIVIAL(error) << "Rdio Scanner Server set, but no Systems are configured\n";
+       return 1;
+     }
 
     return 0;
   }
 
-  
- int init(Config *config, std::vector<Source *> sources, std::vector<System *> systems) { 
-
-   /* you can use this section if you needed to pull information from the Config, Systems, or Sources and add 
-      that to internal data */
-   
-   return 0; 
-  }
 
  /*
    int start() { return 0; }

@@ -3,6 +3,7 @@
 #include <boost/dll/alias.hpp> // for BOOST_DLL_ALIAS
 #include <boost/foreach.hpp>
 
+
 struct Unit_Script_System_Script {
   std::string script;
   std::string short_name;
@@ -27,8 +28,8 @@ int unit_registration(System *sys, long source_id) {
   std::string system_script = get_system_script(sys->get_short_name());
   if ((system_script != "") && (source_id != 0)) {
     char shell_command[200];
-    sprintf(shell_command, "%s %s %li on &", system_script.c_str(), sys->get_short_name().c_str(), source_id);
-    int rc =  system(shell_command);
+    snprintf(shell_command, 200, "%s %s %li on &", system_script.c_str(), sys->get_short_name().c_str(), source_id);
+    int rc __attribute__((unused)) =  system(shell_command);
     return 0;
   }
     return 1;
@@ -39,8 +40,8 @@ int unit_deregistration(System *sys, long source_id) {
   std::string system_script = get_system_script(sys->get_short_name());
   if ((system_script != "") && (source_id != 0)) {
     char shell_command[200];
-    sprintf(shell_command, "%s %s %li off &", system_script.c_str(), sys->get_short_name().c_str(), source_id);
-    int rc =  system(shell_command);
+    snprintf(shell_command, 200, "%s %s %li off &", system_script.c_str(), sys->get_short_name().c_str(), source_id);
+    int rc __attribute__((unused)) =  system(shell_command);
     return 0;
   }
     return 1;
@@ -49,8 +50,8 @@ int unit_acknowledge_response(System *sys, long source_id) {
   std::string system_script = get_system_script(sys->get_short_name());
   if ((system_script != "") && (source_id != 0)) {
     char shell_command[200];
-    sprintf(shell_command, "%s %s %li ackresp &", system_script.c_str(), sys->get_short_name().c_str(), source_id);
-    int rc =  system(shell_command);
+    snprintf(shell_command,200, "%s %s %li ackresp &", system_script.c_str(), sys->get_short_name().c_str(), source_id);
+    int rc __attribute__((unused)) =  system(shell_command);
     return 0;
   }
     return 1;
@@ -69,8 +70,8 @@ int unit_group_affiliation(System *sys, long source_id, long talkgroup_num) {
       first = false;
       patch_string += std::to_string(TGID);
     }
-    sprintf(shell_command, "%s %s %li join %li %s &", system_script.c_str(), sys->get_short_name().c_str(), source_id, talkgroup_num, patch_string.c_str());
-    int rc =  system(shell_command);
+    snprintf(shell_command, 200, "%s %s %li join %li %s &", system_script.c_str(), sys->get_short_name().c_str(), source_id, talkgroup_num, patch_string.c_str());
+    int rc __attribute__((unused)) =  system(shell_command);
     return 0;
   }
     return 1;
@@ -80,8 +81,8 @@ int unit_data_grant(System *sys, long source_id) {
     std::string system_script = get_system_script(sys->get_short_name());
   if ((system_script != "") && (source_id != 0)) {
     char shell_command[200];
-    sprintf(shell_command, "%s %s %li data &", system_script.c_str(), sys->get_short_name().c_str(), source_id);
-    int rc =  system(shell_command);
+    snprintf(shell_command, 200, "%s %s %li data &", system_script.c_str(), sys->get_short_name().c_str(), source_id);
+    int rc __attribute__((unused)) =  system(shell_command);
     return 0;
   }
     return 1;
@@ -91,8 +92,8 @@ int unit_answer_request(System *sys, long source_id, long talkgroup) {
     std::string system_script = get_system_script(sys->get_short_name());
   if ((system_script != "") && (source_id != 0)) {
     char shell_command[200];
-    sprintf(shell_command, "%s %s %li ans_req %li &", system_script.c_str(), sys->get_short_name().c_str(), source_id, talkgroup);
-    int rc =  system(shell_command);
+    snprintf(shell_command, 200, "%s %s %li ans_req %li &", system_script.c_str(), sys->get_short_name().c_str(), source_id, talkgroup);
+    int rc __attribute__((unused)) =  system(shell_command);
     return 0;
   }
     return 1;
@@ -111,8 +112,8 @@ int unit_location(System *sys, long source_id, long talkgroup_num) {
       first = false;
       patch_string += std::to_string(TGID);
     }
-    sprintf(shell_command, "%s %s %li location %li %s &", system_script.c_str(), sys->get_short_name().c_str(), source_id, talkgroup_num, patch_string.c_str());
-    int rc =  system(shell_command);
+    snprintf(shell_command, 200, "%s %s %li location %li %s &", system_script.c_str(), sys->get_short_name().c_str(), source_id, talkgroup_num, patch_string.c_str());
+    int rc __attribute__((unused)) =  system(shell_command);
     return 0;
   }
     return 1;
@@ -133,19 +134,19 @@ int call_start(Call *call) {
       first = false;
       patch_string += std::to_string(TGID);
     }
-    sprintf(shell_command, "%s %s %li call %li %s &", system_script.c_str(), short_name.c_str(), source_id, talkgroup_num, patch_string.c_str());
-    int rc =  system(shell_command);
+    snprintf(shell_command, 200, "%s %s %li call %li %s &", system_script.c_str(), short_name.c_str(), source_id, talkgroup_num, patch_string.c_str());
+    int rc __attribute__((unused)) =  system(shell_command);
     return 0;
   }
     return 1;
 }
 
-  int parse_config(boost::property_tree::ptree &cfg) {
+  int parse_config(json config_data) {
 
-    BOOST_FOREACH (boost::property_tree::ptree::value_type &node, cfg.get_child("systems")) {
+    for (json element : config_data["systems"]) {
       Unit_Script_System_Script system_script;
-      system_script.script = node.second.get<std::string>("unitScript", "");
-      system_script.short_name = node.second.get<std::string>("shortName", "");
+      system_script.script = element.value("unitScript", "");
+      system_script.short_name = element.value("shortName", "");
       if (system_script.script != "") {
         BOOST_LOG_TRIVIAL(info) << "\t- [" << system_script.short_name << "]: " << system_script.script ;
         this->system_scripts.push_back(system_script);

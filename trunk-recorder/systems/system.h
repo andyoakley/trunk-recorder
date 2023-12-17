@@ -4,9 +4,11 @@
 #include "../unit_tags.h"
 #include <boost/foreach.hpp>
 #include <boost/log/trivial.hpp>
+#include <gnuradio/msg_queue.h>
 #include <stdio.h>
 //#include "../source.h"
 #include "parser.h"
+#include <iomanip>
 
 #ifdef __GNUC__
 #pragma GCC diagnostic push
@@ -92,14 +94,17 @@ public:
   virtual int get_max_dev() = 0;
   virtual void set_filter_width(double f) = 0;
   virtual double get_filter_width() = 0;
-
+  virtual gr::msg_queue::sptr get_msg_queue() = 0;
   virtual std::string get_system_type() = 0;
   virtual unsigned long get_sys_id() = 0;
   virtual unsigned long get_wacn() = 0;
   virtual unsigned long get_nac() = 0;
+  virtual int get_sys_rfss() = 0;
+  virtual int get_sys_site_id() = 0;
   virtual void set_xor_mask(unsigned long sys_id, unsigned long wacn, unsigned long nac) = 0;
   virtual const char *get_xor_mask() = 0;
   virtual bool update_status(TrunkMessage message) = 0;
+  virtual bool update_sysid(TrunkMessage message) = 0;
   virtual int get_sys_num() = 0;
   virtual void set_system_type(std::string) = 0;
   virtual std::string get_talkgroups_file() = 0;
@@ -108,7 +113,7 @@ public:
   virtual void set_source(Source *) = 0;
   virtual Talkgroup *find_talkgroup(long tg) = 0;
   virtual Talkgroup *find_talkgroup_by_freq(double freq) = 0;
-  virtual UnitTag *find_unit_tag(long unitID) = 0;
+  virtual std::string find_unit_tag(long unitID) = 0;
   virtual void set_talkgroups_file(std::string) = 0;
   virtual void set_channel_file(std::string channel_file) = 0;
   virtual bool has_channel_file() = 0;
@@ -120,6 +125,8 @@ public:
   virtual int channel_count() = 0;
   virtual int get_message_count() = 0;
   virtual void set_message_count(int count) = 0;
+  virtual void set_decode_rate(int rate) = 0;
+  virtual int get_decode_rate() = 0;
   virtual void add_channel(double channel) = 0;
   virtual void add_conventional_recorder(analog_recorder_sptr rec) = 0;
   virtual std::vector<analog_recorder_sptr> get_conventional_recorders() = 0;
@@ -130,7 +137,6 @@ public:
   virtual std::vector<double> get_channels() = 0;
   virtual std::vector<double> get_control_channels() = 0;
   virtual std::vector<Talkgroup *> get_talkgroups() = 0;
-
   virtual void set_bandplan(std::string) = 0;
   virtual std::string get_bandplan() = 0;
   virtual void set_bandfreq(int) = 0;
@@ -159,5 +165,15 @@ public:
   virtual void update_active_talkgroup_patches(PatchData f_data) = 0;
   virtual void delete_talkgroup_patch(PatchData f_data) = 0;
   virtual void clear_stale_talkgroup_patches() = 0;
+
+  virtual bool get_multiSite() = 0;
+  virtual void set_multiSite(bool multiSite) = 0;
+
+  virtual std::string get_multiSiteSystemName() = 0;
+  virtual void set_multiSiteSystemName(std::string multiSiteSystemName) = 0;
+
+  virtual unsigned long get_multiSiteSystemNumber() = 0;
+  virtual void set_multiSiteSystemNumber(unsigned long multiSiteSystemName) = 0;
+
 };
 #endif

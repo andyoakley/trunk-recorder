@@ -25,7 +25,7 @@ typedef boost::shared_ptr<p25_recorder> p25_recorder_sptr;
 typedef std::shared_ptr<p25_recorder> p25_recorder_sptr;
 #endif
 
-p25_recorder_sptr make_p25_recorder(Source *src);
+p25_recorder_sptr make_p25_recorder(Source *src, Recorder_Type type);
 #include "../source.h"
 
 class p25_recorder : virtual public gr::hier_block2, virtual public Recorder {
@@ -45,7 +45,6 @@ public:
   virtual void set_tdma(bool phase2) = 0;
   virtual void switch_tdma(bool phase2) = 0;
   virtual void set_tdma_slot(int slot) = 0;
-  virtual void set_record_more_transmissions(bool more) = 0;
   virtual void set_source(long src) = 0;
   virtual double since_last_write() = 0;
   virtual double get_current_length() = 0;

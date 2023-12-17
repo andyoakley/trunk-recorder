@@ -12,6 +12,11 @@
 std::string Call_impl::get_capture_dir() {
   return this->config.capture_dir;
 }
+
+std::string Call_impl::get_temp_dir() { 
+  return this->config.temp_dir; 
+}
+
 /*
 Call * Call::make(long t, double f, System *s, Config c) {
 
@@ -35,6 +40,7 @@ Call_impl::Call_impl(long t, double f, System *s, Config c) {
   stop_time = time(NULL);
   last_update = time(NULL);
   state = MONITORING;
+  monitoringState = UNSPECIFIED;
   debug_recording = false;
   sigmf_recording = false;
   recorder = NULL;
@@ -45,6 +51,7 @@ Call_impl::Call_impl(long t, double f, System *s, Config c) {
   duplex = false;
   mode = false;
   is_analog = false;
+  was_update = false;
   priority = 0;
   set_freq(f);
   this->update_talkgroup_display();
@@ -63,6 +70,7 @@ Call_impl::Call_impl(TrunkMessage message, System *s, Config c) {
   stop_time = time(NULL);
   last_update = time(NULL);
   state = MONITORING;
+  monitoringState = UNSPECIFIED;
   debug_recording = false;
   sigmf_recording = false;
   recorder = NULL;
@@ -74,6 +82,11 @@ Call_impl::Call_impl(TrunkMessage message, System *s, Config c) {
   mode = message.mode;
   is_analog = false;
   priority = message.priority;
+  if (message.message_type == GRANT) {
+    was_update = false;
+  } else {
+    was_update = true;
+  }
   set_freq(message.freq);
   add_source(message.source);
   this->update_talkgroup_display();
@@ -86,36 +99,14 @@ Call_impl::~Call_impl() {
 void Call_impl::restart_call() {
 }
 
-void Call_impl::set_record_more_transmissions(bool more) {
-  if (this->get_recorder() != NULL) {
-    this->get_recorder()->set_record_more_transmissions(more);
-  }
-}
-
-void Call_impl::inactive_call() {
-  if (this->get_recorder() != NULL) {
-    // If the call is being recorded, check to see if the recorder is currently in an INACTIVE state. This means that the recorder is not
-    // doing anything and can be stopped.
-    if ((state == RECORDING) && this->get_recorder()->is_idle()) {
-      BOOST_LOG_TRIVIAL(info) << "[" << sys->get_short_name() << "]\t\033[0;34m" << this->get_call_num() << "C\033[0m\tTG: " << this->get_talkgroup_display() << "\tFreq: " << format_freq(get_freq()) << "\tStopping Recorded Call_impl, setting call state to INACTIVE - Last Update: " << this->since_last_update() << "s";
-      this->set_state(INACTIVE);
-    }
-    this->get_recorder()->set_record_more_transmissions(false);
-  }
-}
-
 void Call_impl::stop_call() {
 
   if (this->get_recorder() != NULL) {
     // If the call is being recorded, check to see if the recorder is currently in an INACTIVE state. This means that the recorder is not
     // doing anything and can be stopped.
     if ((state == RECORDING) && this->get_recorder()->is_idle()) {
-      BOOST_LOG_TRIVIAL(info) << "[" << sys->get_short_name() << "]\t\033[0;34m" << this->get_call_num() << "C\033[0m\tTG: " << this->get_talkgroup_display() << "\tFreq: " << format_freq(get_freq()) << "\tStopping Recorded Call_impl, setting call state to COMPLETED - Last Update: " << this->since_last_update() << "s";
-      this->set_state(COMPLETED);
-    } else {
-      BOOST_LOG_TRIVIAL(info) << "[" << sys->get_short_name() << "]\t\033[0;34m" << this->get_call_num() << "C\033[0m\tTG: " << this->get_talkgroup_display() << "\tFreq: " << format_freq(get_freq()) << "\tTrying to COMPLETE, Recorder still active, setting call state to INACTIVE - Last Update: " << this->since_last_update() << "s";
-      this->set_state(INACTIVE);
-    }
+      BOOST_LOG_TRIVIAL(info) << "[" << sys->get_short_name() << "]\t\033[0;34m" << this->get_call_num() << "C\033[0m\tTG: " << this->get_talkgroup_display() << "\tFreq: " << format_freq(get_freq()) << "\tStopping Recorded Call_impl - Last Update: " << this->since_last_update() << "s";
+    } 
   }
 }
 long Call_impl::get_call_num() {
@@ -126,14 +117,17 @@ void Call_impl::conclude_call() {
   // BOOST_LOG_TRIVIAL(info) << "conclude_call()";
   stop_time = time(NULL);
 
-  if (state == COMPLETED) {
+  if (state == RECORDING || (state == MONITORING && monitoringState == SUPERSEDED)) {
     final_length = recorder->get_current_length();
 
     if (!recorder) {
       BOOST_LOG_TRIVIAL(error) << "Call_impl::end_call() State is recording, but no recorder assigned!";
     }
-    BOOST_LOG_TRIVIAL(info) << "[" << sys->get_short_name() << "]\t\033[0;34m" << this->get_call_num() << "C\033[0m\tTG: " << this->get_talkgroup_display() << "\tFreq: " << format_freq(get_freq()) << "\t\u001b[33mConcluding Recorded Call_impl\u001b[0m - Last Update: " << this->since_last_update() << "s\tCall_impl Elapsed: " << this->elapsed();
+    BOOST_LOG_TRIVIAL(info) << "[" << sys->get_short_name() << "]\t\033[0;34m" << this->get_call_num() << "C\033[0m\tTG: " << this->get_talkgroup_display() << "\tFreq: " << format_freq(get_freq()) << "\t\u001b[33mConcluding Recorded Call\u001b[0m - Last Update: " << this->since_last_update() << "s\tRecorder last write:" << recorder->since_last_write() << "\tCall Elapsed: " << this->elapsed();
 
+    if (was_update) {
+      BOOST_LOG_TRIVIAL(info) << "[" << sys->get_short_name() << "]\t\033[0;34m" << this->get_call_num() << "C\033[0m\tTG: " << this->get_talkgroup_display() << "\tFreq: " << format_freq(get_freq()) << "\t\u001b[33mCall was UPDATE not GRANT\u001b[0m";
+    }
     this->get_recorder()->stop();
     transmission_list = this->get_recorder()->get_transmission_list();
     if (this->get_sigmf_recording() == true) {
@@ -145,8 +139,6 @@ void Call_impl::conclude_call() {
     }
 
     Call_Concluder::conclude_call(this, sys, config);
-  } else {
-    BOOST_LOG_TRIVIAL(error) << "[" << sys->get_short_name() << "]\t\033[0;34m" << this->get_call_num() << "C\033[0m\tTG: " << this->get_talkgroup_display() << "Concluding call, but call state is not COMPLETED!";
   }
 }
 
@@ -255,6 +247,14 @@ State Call_impl::get_state() {
   return state;
 }
 
+void Call_impl::set_monitoring_state(MonitoringState s) {
+  monitoringState = s;
+}
+
+MonitoringState Call_impl::get_monitoring_state() {
+  return monitoringState;
+}
+
 void Call_impl::set_encrypted(bool m) {
   encrypted = m;
 }
@@ -269,6 +269,18 @@ void Call_impl::set_emergency(bool m) {
 
 bool Call_impl::get_emergency() {
   return emergency;
+}
+
+int Call_impl::get_priority() {
+  return priority;
+}
+
+bool Call_impl::get_mode() {
+  return mode;
+}
+
+bool Call_impl::get_duplex() {
+  return duplex;
 }
 
 void Call_impl::set_tdma_slot(int m) {
@@ -322,22 +334,29 @@ bool Call_impl::add_source(long src) {
 }
 
 bool Call_impl::update(TrunkMessage message) {
-  if ((state == INACTIVE) || (state == COMPLETED)) {
-    BOOST_LOG_TRIVIAL(error) << "[" << sys->get_short_name() << "]\t\033[0;34m" << this->get_call_num() << "C\033[0m\tCall_impl Update, but state is: " << state << " - Call_impl TG: " << get_talkgroup() << "\t Call_impl Freq: " << get_freq() << "\tMsg Tg: " << message.talkgroup << "\tMsg Freq: " << message.freq;
-  } else {
     last_update = time(NULL);
     if ((message.freq != this->curr_freq) || (message.talkgroup != this->talkgroup)) {
       BOOST_LOG_TRIVIAL(error) << "[" << sys->get_short_name() << "]\t\033[0;34m" << this->get_call_num() << "C\033[0m\tCall_impl Update, message mismatch - Call_impl TG: " << get_talkgroup() << "\t Call_impl Freq: " << get_freq() << "\tMsg Tg: " << message.talkgroup << "\tMsg Freq: " << message.freq;
     } else {
       return add_source(message.source);
     }
-  }
   return false;
 }
 
 int Call_impl::since_last_update() {
   return time(NULL) - last_update;
 }
+
+double Call_impl::since_last_voice_update() {
+    if (state == RECORDING) {
+    Recorder *rec = this->get_recorder();
+    if (rec != NULL) {
+      return rec->since_last_write();
+    }
+  }
+  return -1;
+}
+
 
 long Call_impl::elapsed() {
   return time(NULL) - start_time;
@@ -360,7 +379,7 @@ long Call_impl::get_stop_time() {
 }
 
 std::string Call_impl::get_system_type() {
-  return sys->get_system_type().c_str();
+  return sys->get_system_type();
 }
 
 void Call_impl::set_talkgroup_tag(std::string tag) {
@@ -406,21 +425,26 @@ boost::property_tree::ptree Call_impl::get_stats() {
   boost::property_tree::ptree freq_list_node;
   boost::property_tree::ptree source_list_node;
   call_node.put("id", boost::lexical_cast<std::string>(this->get_sys_num()) + "_" + boost::lexical_cast<std::string>(this->get_talkgroup()) + "_" + boost::lexical_cast<std::string>(this->get_start_time()));
+  call_node.put("callNum", this->get_call_num());
   call_node.put("freq", this->get_freq());
   call_node.put("sysNum", this->get_sys_num());
   call_node.put("shortName", this->get_short_name());
   call_node.put("talkgroup", this->get_talkgroup());
   call_node.put("talkgrouptag", this->get_talkgroup_tag());
-  call_node.put("elasped", this->elapsed());
+  call_node.put("elapsed", this->elapsed());
   if (get_state() == RECORDING)
     call_node.put("length", this->get_current_length());
   else
     call_node.put("length", this->get_final_length());
   call_node.put("state", this->get_state());
+  call_node.put("monState", this->get_monitoring_state());
   call_node.put("phase2", this->get_phase2_tdma());
   call_node.put("conventional", this->is_conventional());
   call_node.put("encrypted", this->get_encrypted());
   call_node.put("emergency", this->get_emergency());
+  call_node.put("priority", this->get_priority());
+  call_node.put("mode", this->get_mode());
+  call_node.put("duplex", this->get_duplex());
   call_node.put("startTime", this->get_start_time());
   call_node.put("stopTime", this->get_stop_time());
   call_node.put("srcId", this->get_current_source_id());

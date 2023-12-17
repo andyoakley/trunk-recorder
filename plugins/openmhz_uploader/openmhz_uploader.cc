@@ -1,13 +1,13 @@
 #include <curl/curl.h>
-#include <time.h>
 #include <iomanip>
+#include <time.h>
 #include <vector>
 
 #include "../../trunk-recorder/call_concluder/call_concluder.h"
 #include "../../trunk-recorder/plugin_manager/plugin_api.h"
+#include "../trunk-recorder/gr_blocks/decoder_wrapper.h"
 #include <boost/dll/alias.hpp> // for BOOST_DLL_ALIAS
 #include <boost/foreach.hpp>
-#include "../trunk-recorder/gr_blocks/decoder_wrapper.h"
 #include <sys/stat.h>
 
 struct Openmhz_System_Key {
@@ -21,8 +21,8 @@ struct Openmhz_Uploader_Data {
 };
 
 class Openmhz_Uploader : public Plugin_Api {
-  //float aggr_;
-  //my_plugin_aggregator() : aggr_(0) {}
+  // float aggr_;
+  // my_plugin_aggregator() : aggr_(0) {}
   Openmhz_Uploader_Data data;
 
 public:
@@ -43,14 +43,24 @@ public:
 
     std::string api_key = get_api_key(call_info.short_name);
     if (api_key.size() == 0) {
-      //BOOST_LOG_TRIVIAL(error) << "[" << call_info.short_name << "]\tTG: " << talkgroup_display << "\t " << std::put_time(std::localtime(&start_time), "%c %Z") << "\tOpenMHz Upload failed, API Key not found in config for shortName";
+      // BOOST_LOG_TRIVIAL(error) << "[" << call_info.short_name << "]\tTG: " << talkgroup_display << "\t " << std::put_time(std::localtime(&start_time), "%c %Z") << "\tOpenMHz Upload failed, API Key not found in config for shortName";
       return 0;
     }
-    
+
     std::ostringstream freq;
     std::string freq_string;
     freq << std::fixed << std::setprecision(0);
     freq << call_info.freq;
+
+    std::ostringstream error_count;
+    std::string error_count_string;
+    error_count << std::fixed << std::setprecision(0);
+    error_count << call_info.error_count;
+
+    std::ostringstream spike_count;
+    std::string spike_count_string;
+    spike_count << std::fixed << std::setprecision(0);
+    spike_count << call_info.spike_count;
 
     std::ostringstream call_length;
     std::string call_length_string;
@@ -62,9 +72,8 @@ public:
     source_list << std::fixed << std::setprecision(2);
     source_list << "[";
 
-
     if (call_info.transmission_source_list.size() != 0) {
-      for (int i = 0; i < call_info.transmission_source_list.size(); i++) {
+      for (unsigned long i = 0; i < call_info.transmission_source_list.size(); i++) {
         source_list << "{ \"pos\": " << std::setprecision(2) << call_info.transmission_source_list[i].position << ", \"src\": " << std::setprecision(0) << call_info.transmission_source_list[i].source << " }";
 
         if (i < (call_info.transmission_source_list.size() - 1)) {
@@ -77,28 +86,6 @@ public:
       source_list << "]";
     }
 
-
-    std::ostringstream freq_list;
-    std::string freq_list_string;
-    freq_list << std::fixed << std::setprecision(2);
-    freq_list << "[";
-
-    if (call_info.transmission_error_list.size() != 0) {
-      for (std::size_t i = 0; i < call_info.transmission_error_list.size(); i++) {
-          freq_list << "{\"freq\": " << std::fixed << std::setprecision(0) << call_info.freq << ", \"time\": " << call_info.transmission_error_list[i].time << ", \"pos\": " << std::fixed << std::setprecision(2) << call_info.transmission_error_list[i].position << ", \"len\": " << call_info.transmission_error_list[i].total_len  << ", \"error_count\": \"" << std::setprecision(0) <<call_info.transmission_error_list[i].error_count << "\", \"spike_count\": \"" << call_info.transmission_error_list[i].spike_count << "\"}"; 
-  
-        if (i < (call_info.transmission_error_list.size() - 1)) {
-          freq_list << ", ";
-        } else {
-          freq_list << "]";
-        }
-      }
-    }else {
-      freq_list << "]";
-    }
-
-
-
     char formattedTalkgroup[62];
     snprintf(formattedTalkgroup, 61, "%c[%dm%10ld%c[0m", 0x1B, 35, call_info.talkgroup, 0x1B);
     std::string talkgroup_display = boost::lexical_cast<std::string>(formattedTalkgroup);
@@ -108,9 +95,10 @@ public:
     int still_running = 0;
     std::string response_buffer;
     freq_string = freq.str();
+    error_count_string = error_count.str();
+    spike_count_string = spike_count.str();
 
     source_list_string = source_list.str();
-    freq_list_string = freq_list.str();
     call_length_string = call_length.str();
 
     struct curl_httppost *formpost = NULL;
@@ -130,6 +118,18 @@ public:
                  &lastptr,
                  CURLFORM_COPYNAME, "freq",
                  CURLFORM_COPYCONTENTS, freq_string.c_str(),
+                 CURLFORM_END);
+
+    curl_formadd(&formpost,
+                 &lastptr,
+                 CURLFORM_COPYNAME, "error_count",
+                 CURLFORM_COPYCONTENTS, error_count_string.c_str(),
+                 CURLFORM_END);
+
+    curl_formadd(&formpost,
+                 &lastptr,
+                 CURLFORM_COPYNAME, "spike_count",
+                 CURLFORM_COPYCONTENTS, spike_count_string.c_str(),
                  CURLFORM_END);
 
     curl_formadd(&formpost,
@@ -172,11 +172,6 @@ public:
                  &lastptr,
                  CURLFORM_COPYNAME, "source_list",
                  CURLFORM_COPYCONTENTS, source_list_string.c_str(),
-                 CURLFORM_END);
-    curl_formadd(&formpost,
-                 &lastptr,
-                 CURLFORM_COPYNAME, "freq_list",
-                 CURLFORM_COPYCONTENTS, freq_list_string.c_str(),
                  CURLFORM_END);
 
     curl = curl_easy_init();
@@ -284,12 +279,12 @@ public:
         struct stat file_info;
         stat(call_info.converted, &file_info);
 
-        BOOST_LOG_TRIVIAL(info) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << talkgroup_display << "\tFreq: " << format_freq(call_info.freq) << "\tOpenMHz Upload Success - file size: " << file_info.st_size;
+        BOOST_LOG_TRIVIAL(info) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << call_info.talkgroup_display << "\tFreq: " << format_freq(call_info.freq) << "\tOpenMHz Upload Success - file size: " << file_info.st_size;
         ;
         return 0;
       }
     }
-    BOOST_LOG_TRIVIAL(error) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << talkgroup_display << "\tFreq: " << format_freq(call_info.freq) << "\tOpenMHz Upload Error: " << response_buffer;
+    BOOST_LOG_TRIVIAL(error) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << call_info.talkgroup_display << "\tFreq: " << format_freq(call_info.freq) << "\tOpenMHz Upload Error: " << response_buffer;
     return 1;
   }
 
@@ -297,15 +292,15 @@ public:
     return upload(call_info);
   }
 
-  int parse_config(boost::property_tree::ptree &cfg) {
+  int parse_config(json config_data) {
 
     // Tests to see if the uploadServer value exists in the config file
-    boost::optional<std::string> upload_server_exists = cfg.get_optional<std::string>("uploadServer");
+    bool upload_server_exists = config_data.contains("uploadServer");
     if (!upload_server_exists) {
       return 1;
     }
 
-    this->data.openmhz_server = cfg.get<std::string>("uploadServer", "");
+    this->data.openmhz_server = config_data.value("uploadServer", "");
     BOOST_LOG_TRIVIAL(info) << "OpenMHz Server: " << this->data.openmhz_server;
 
     // from: http://www.zedwood.com/article/cpp-boost-url-regex
@@ -315,14 +310,14 @@ public:
     if (!regex_match(this->data.openmhz_server.c_str(), what, ex)) {
       BOOST_LOG_TRIVIAL(error) << "Unable to parse Server URL\n";
       return 1;
-    } 
+    }
     // Gets the API key for each system, if defined
-    BOOST_FOREACH (boost::property_tree::ptree::value_type &node, cfg.get_child("systems")) {
-      boost::optional<boost::property_tree::ptree &> openmhz_exists = node.second.get_child_optional("apiKey");
+    for (json element : config_data["systems"]) {
+      bool openmhz_exists = element.contains("apiKey");
       if (openmhz_exists) {
         Openmhz_System_Key key;
-        key.api_key = node.second.get<std::string>("apiKey", "");
-        key.short_name = node.second.get<std::string>("shortName", "");
+        key.api_key = element.value("apiKey", "");
+        key.short_name = element.value("shortName", "");
         BOOST_LOG_TRIVIAL(info) << "Uploading calls for: " << key.short_name;
         this->data.keys.push_back(key);
       }

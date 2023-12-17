@@ -88,7 +88,7 @@ protected:
   void initialize(Source *src);
 
 public:
-  dmr_recorder_impl(Source *src);
+  dmr_recorder_impl(Source *src, Recorder_Type type);
   DecimSettings get_decim(long speed);
   void initialize_prefilter();
   void tune_offset(double f);
@@ -100,7 +100,6 @@ public:
   void set_tdma(bool phase2);
   void switch_tdma(bool phase2);
   void set_tdma_slot(int slot);
-  void set_record_more_transmissions(bool more);
   double since_last_write();
   void generate_arb_taps();
   double get_current_length();
@@ -196,7 +195,8 @@ private:
   gr::blocks::multiply_const_ff::sptr levels;
   gr::blocks::transmission_sink::sptr wav_sink_slot0;
   gr::blocks::transmission_sink::sptr wav_sink_slot1;
-  gr::blocks::plugin_wrapper::sptr plugin_sink;
+  gr::blocks::plugin_wrapper::sptr plugin_sink_slot0;
+  gr::blocks::plugin_wrapper::sptr plugin_sink_slot1;
 };
 
 #endif // ifndef dmr_recorder_H

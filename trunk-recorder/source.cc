@@ -1,6 +1,8 @@
 #include "source.h"
 #include "formatter.h"
 
+using json = nlohmann::json;
+
 static int src_counter = 0;
 
 void Source::set_antenna(std::string ant) {
@@ -136,10 +138,10 @@ int Source::get_if_gain() {
 }
 
 analog_recorder_sptr Source::create_conventional_recorder(gr::top_block_sptr tb) {
-
-  analog_recorder_sptr log = make_analog_recorder(this);
-
-  analog_recorders.push_back(log);
+  // Not adding it to the vector of analog_recorders. We don't want it to be available for trunk recording.
+  // Conventional recorders are tracked seperately in analog_conv_recorders
+  analog_recorder_sptr log = make_analog_recorder(this, ANALOGC);
+  analog_conv_recorders.push_back(log);
   tb->connect(source_block, 0, log, 0);
   return log;
 }
@@ -148,7 +150,7 @@ void Source::create_analog_recorders(gr::top_block_sptr tb, int r) {
   max_analog_recorders = r;
 
   for (int i = 0; i < max_analog_recorders; i++) {
-    analog_recorder_sptr log = make_analog_recorder(this);
+    analog_recorder_sptr log = make_analog_recorder(this, ANALOG);
     analog_recorders.push_back(log);
     tb->connect(source_block, 0, log, 0);
   }
@@ -157,13 +159,17 @@ void Source::create_analog_recorders(gr::top_block_sptr tb, int r) {
 Recorder *Source::get_analog_recorder(Talkgroup *talkgroup, int priority, Call *call) {
   int num_available_recorders = get_num_available_analog_recorders();
 
-  if(talkgroup && (priority == -1)){
+  if (talkgroup && (priority == -1)) {
+    call->set_state(MONITORING);
+    call->set_monitoring_state(IGNORED_TG);
     BOOST_LOG_TRIVIAL(info) << "[" << call->get_system()->get_short_name() << "]\t\033[0;34m" << call->get_call_num() << "C\033[0m\tTG: " << call->get_talkgroup_display() << "\tFreq: " << format_freq(call->get_freq()) << "\tNot recording talkgroup. Priority is -1.";
     return NULL;
   }
 
   if (talkgroup && priority > num_available_recorders) { // a high priority is bad. You need at least the number of availalbe recorders to your priority
-    BOOST_LOG_TRIVIAL(error) << "[" << call->get_system()->get_short_name() << "]\t\033[0;34m" << call->get_call_num() << "C\033[0m\tTG: " << call->get_talkgroup_display() << "\tFreq: " << format_freq(call->get_freq()) << "\tNot recording talkgroup. Priority is " <<  priority << " but only " << num_available_recorders << " recorders are available.";
+    call->set_state(MONITORING);
+    call->set_monitoring_state(NO_RECORDER);
+    BOOST_LOG_TRIVIAL(error) << "[" << call->get_system()->get_short_name() << "]\t\033[0;34m" << call->get_call_num() << "C\033[0m\tTG: " << call->get_talkgroup_display() << "\tFreq: " << format_freq(call->get_freq()) << "\tNot recording talkgroup. Priority is " << priority << " but only " << num_available_recorders << " recorders are available.";
     return NULL;
   }
 
@@ -189,22 +195,68 @@ void Source::create_digital_recorders(gr::top_block_sptr tb, int r) {
   max_digital_recorders = r;
 
   for (int i = 0; i < max_digital_recorders; i++) {
-    p25_recorder_sptr log = make_p25_recorder(this);
+    p25_recorder_sptr log = make_p25_recorder(this, P25);
     digital_recorders.push_back(log);
     tb->connect(source_block, 0, log, 0);
   }
 }
 
+Recorder *Source::get_digital_recorder(Talkgroup *talkgroup, int priority, Call *call) {
+  int num_available_recorders = get_num_available_digital_recorders();
+
+  if (talkgroup && (priority == -1)) {
+    call->set_state(MONITORING);
+    call->set_monitoring_state(IGNORED_TG);
+    BOOST_LOG_TRIVIAL(info) << "[" << call->get_system()->get_short_name() << "]\t\033[0;34m" << call->get_call_num() << "C\033[0m\tTG: " << call->get_talkgroup_display() << "\tFreq: " << format_freq(call->get_freq()) << "\tNot recording talkgroup. Priority is -1.";
+    return NULL;
+  }
+
+  if (talkgroup && priority > num_available_recorders) { // a high priority is bad. You need at least the number of availalbe recorders to your priority
+    call->set_state(MONITORING);
+    call->set_monitoring_state(NO_RECORDER);
+    BOOST_LOG_TRIVIAL(error) << "[" << call->get_system()->get_short_name() << "]\t\033[0;34m" << call->get_call_num() << "C\033[0m\tTG: " << call->get_talkgroup_display() << "\tFreq: " << format_freq(call->get_freq()) << "\tNot recording talkgroup. Priority is " << priority << " but only " << num_available_recorders << " recorders are available.";
+    return NULL;
+  }
+
+  return get_digital_recorder(call);
+}
+
+Recorder *Source::get_digital_recorder(Call *call) {
+  for (std::vector<p25_recorder_sptr>::iterator it = digital_recorders.begin();
+       it != digital_recorders.end(); it++) {
+    p25_recorder_sptr rx = *it;
+
+    if (rx->get_state() == AVAILABLE) {
+      return (Recorder *)rx.get();
+
+      break;
+    }
+  }
+
+  BOOST_LOG_TRIVIAL(error) << "[" << call->get_system()->get_short_name() << "]\t\033[0;34m" << call->get_call_num() << "C\033[0m\tTG: " << call->get_talkgroup_display() << "\tFreq: " << format_freq(call->get_freq()) << "\t[ " << device << " ] No Digital Recorders Available.";
+
+  for (std::vector<p25_recorder_sptr>::iterator it = digital_recorders.begin();
+       it != digital_recorders.end(); it++) {
+    p25_recorder_sptr rx = *it;
+    BOOST_LOG_TRIVIAL(info) << "[ " << rx->get_num() << " ] State: " << format_state(rx->get_state()) << " Freq: " << rx->get_freq();
+  }
+  return NULL;
+}
+
 p25_recorder_sptr Source::create_digital_conventional_recorder(gr::top_block_sptr tb) {
   // Not adding it to the vector of digital_recorders. We don't want it to be available for trunk recording.
-  p25_recorder_sptr log = make_p25_recorder(this);
+  // Conventional recorders are tracked seperately in digital_conv_recorders
+  p25_recorder_sptr log = make_p25_recorder(this, P25C);
+  digital_conv_recorders.push_back(log);
   tb->connect(source_block, 0, log, 0);
   return log;
 }
 
 dmr_recorder_sptr Source::create_dmr_conventional_recorder(gr::top_block_sptr tb) {
   // Not adding it to the vector of digital_recorders. We don't want it to be available for trunk recording.
-  dmr_recorder_sptr log = make_dmr_recorder(this);
+  // Conventional recorders are tracked seperately in digital_conv_recorders
+  dmr_recorder_sptr log = make_dmr_recorder(this, DMR);
+  dmr_conv_recorders.push_back(log);
   tb->connect(source_block, 0, log, 0);
   return log;
 }
@@ -261,20 +313,41 @@ Recorder *Source::get_sigmf_recorder() {
 }
 
 void Source::print_recorders() {
-  BOOST_LOG_TRIVIAL(info) << "[ " << device << " ]  ";
+  BOOST_LOG_TRIVIAL(info) << "[ Source " << src_num << ": " << format_freq(center) << " ] " << device;
 
   for (std::vector<p25_recorder_sptr>::iterator it = digital_recorders.begin();
        it != digital_recorders.end(); it++) {
     p25_recorder_sptr rx = *it;
 
-    BOOST_LOG_TRIVIAL(info) << "[ D" << rx->get_num() << " ] State: " << format_state(rx->get_state());
+    BOOST_LOG_TRIVIAL(info) << "\t[ " << rx->get_num() << " ] " << rx->get_type_string() << "\tState: " << format_state(rx->get_state());
+  }
+
+  for (std::vector<p25_recorder_sptr>::iterator it = digital_conv_recorders.begin();
+       it != digital_conv_recorders.end(); it++) {
+    p25_recorder_sptr rx = *it;
+
+    BOOST_LOG_TRIVIAL(info) << "\t[ " << rx->get_num() << " ] " << rx->get_type_string() << "\tState: " << format_state(rx->get_state());
+  }
+
+  for (std::vector<dmr_recorder_sptr>::iterator it = dmr_conv_recorders.begin();
+       it != dmr_conv_recorders.end(); it++) {
+    dmr_recorder_sptr rx = *it;
+
+    BOOST_LOG_TRIVIAL(info) << "\t[ " << rx->get_num() << " ] " << rx->get_type_string() << "\tState: " << format_state(rx->get_state());
   }
 
   for (std::vector<analog_recorder_sptr>::iterator it = analog_recorders.begin();
        it != analog_recorders.end(); it++) {
     analog_recorder_sptr rx = *it;
 
-    BOOST_LOG_TRIVIAL(info) << "[ A" << rx->get_num() << " ] State: " << format_state(rx->get_state());
+    BOOST_LOG_TRIVIAL(info) << "\t[ " << rx->get_num() << " ] " << rx->get_type_string() << "\tState: " << format_state(rx->get_state());
+  }
+
+  for (std::vector<analog_recorder_sptr>::iterator it = analog_conv_recorders.begin();
+       it != analog_conv_recorders.end(); it++) {
+    analog_recorder_sptr rx = *it;
+
+    BOOST_LOG_TRIVIAL(info) << "\t[ " << rx->get_num() << " ] " << rx->get_type_string() << "\tState: " << format_state(rx->get_state());
   }
 }
 
@@ -289,11 +362,11 @@ void Source::tune_digital_recorders() {
 }
 
 int Source::digital_recorder_count() {
-  return digital_recorders.size();
+  return digital_recorders.size() + digital_conv_recorders.size() + dmr_conv_recorders.size();
 }
 
 int Source::analog_recorder_count() {
-  return analog_recorders.size();
+  return analog_recorders.size() + analog_conv_recorders.size();
 }
 
 int Source::debug_recorder_count() {
@@ -333,44 +406,6 @@ int Source::get_num_available_analog_recorders() {
     }
   }
   return num_available_recorders;
-}
-
-Recorder *Source::get_digital_recorder(Talkgroup *talkgroup, int priority, Call *call) {
-  int num_available_recorders = get_num_available_digital_recorders();
-
-  if(talkgroup && (priority == -1)){
-    BOOST_LOG_TRIVIAL(info) << "[" << call->get_system()->get_short_name() << "]\t\033[0;34m" << call->get_call_num() << "C\033[0m\tTG: " << call->get_talkgroup_display() << "\tFreq: " << format_freq(call->get_freq()) << "\tNot recording talkgroup. Priority is -1.";
-    return NULL;
-  }
-
-  if (talkgroup && priority > num_available_recorders) { // a high priority is bad. You need at least the number of availalbe recorders to your priority
-    BOOST_LOG_TRIVIAL(error) << "[" << call->get_system()->get_short_name() << "]\t\033[0;34m" << call->get_call_num() << "C\033[0m\tTG: " << call->get_talkgroup_display() << "\tFreq: " << format_freq(call->get_freq()) << "\tNot recording talkgroup. Priority is " <<  priority << " but only " << num_available_recorders << " recorders are available.";
-    return NULL;
-  }
-
-  return get_digital_recorder(call);
-}
-
-Recorder *Source::get_digital_recorder(Call *call) {
-  for (std::vector<p25_recorder_sptr>::iterator it = digital_recorders.begin();
-       it != digital_recorders.end(); it++) {
-    p25_recorder_sptr rx = *it;
-
-    if (rx->get_state() == AVAILABLE) {
-      return (Recorder *)rx.get();
-
-      break;
-    }
-  }
-
-  BOOST_LOG_TRIVIAL(error) << "[" << call->get_system()->get_short_name() << "]\t\033[0;34m" << call->get_call_num() << "C\033[0m\tTG: " << call->get_talkgroup_display() << "\tFreq: " << format_freq(call->get_freq()) << "\t[ " << device << " ] No Digital Recorders Available.";
-
-  for (std::vector<p25_recorder_sptr>::iterator it = digital_recorders.begin();
-       it != digital_recorders.end(); it++) {
-    p25_recorder_sptr rx = *it;
-    BOOST_LOG_TRIVIAL(info) << "[ " << rx->get_num() << " ] State: " << format_state(rx->get_state()) << " Freq: " << rx->get_freq();
-  }
-  return NULL;
 }
 
 gr::basic_block_sptr Source::get_src_block() {
@@ -450,6 +485,7 @@ Source::Source(double c, double r, double e, std::string drv, std::string dev, C
     BOOST_LOG_TRIVIAL(info) << "Setting sample rate to: " << FormatSamplingRate(rate);
     osmo_src->set_sample_rate(rate);
     actual_rate = osmo_src->get_sample_rate();
+    rate = round(actual_rate);
     BOOST_LOG_TRIVIAL(info) << "Actual sample rate: " << FormatSamplingRate(actual_rate);
     BOOST_LOG_TRIVIAL(info) << "Tuning to " << format_freq(center + error);
     osmo_src->set_center_freq(center + error, 0);
@@ -491,6 +527,68 @@ Source::Source(double c, double r, double e, std::string drv, std::string dev, C
   }
 }
 
+void Source::set_iq_source(std::string iq_file, bool repeat, double center, double rate) {
+  this->rate = rate;
+  this->center = center;
+  error = 0;
+  min_hz = center - ((rate / 2));
+  max_hz = center + ((rate / 2));
+  driver = "iqfile";
+  device = "";
+  gain = 0;
+  lna_gain = 0;
+  tia_gain = 0;
+  pga_gain = 0;
+  mix_gain = 0;
+  if_gain = 0;
+  src_num = src_counter++;
+  max_digital_recorders = 0;
+  max_debug_recorders = 0;
+  max_sigmf_recorders = 0;
+  max_analog_recorders = 0;
+  debug_recorder_port = 0;
+
+  iq_file_source::sptr iq_file_src;
+  iq_file_src = iq_file_source::make(iq_file, this->rate, repeat);
+
+  BOOST_LOG_TRIVIAL(info) << "SOURCE TYPE IQ FILE";
+  BOOST_LOG_TRIVIAL(info) << "Setting Center to: " << FormatSamplingRate(center);
+  BOOST_LOG_TRIVIAL(info) << "Setting sample rate to: " << FormatSamplingRate(rate);
+
+  source_block = iq_file_src;
+}
+
+Source::Source(std::string sigmf_meta, std::string sigmf_data, bool repeat, Config *cfg) {
+  json data;
+  std::cout << sigmf_meta << std::endl;
+  try {
+    std::ifstream f(sigmf_meta);
+    data = json::parse(f);
+  } catch (const json::parse_error &e) {
+    // output exception information
+    std::cout << "message: " << e.what() << '\n'
+              << "exception id: " << e.id << '\n'
+              << "byte position of error: " << e.byte << std::endl;
+    exit(1);
+  }
+
+  std::cout << data.dump(4) << std::endl;
+  json global = data["global"];
+
+  config = cfg;
+  this->rate = global["core:sample_rate"];
+
+  json capture = data["captures"][0];
+  this->center = capture["core:frequency"];
+  std::cout << "Rate: " << rate << "Center: " << center << std::endl;
+  set_iq_source(sigmf_data, repeat, center, rate);
+}
+
+Source::Source(std::string iq_file, bool repeat, double center, double rate, Config *cfg) {
+  config = cfg;
+  set_iq_source(iq_file, repeat, center, rate);
+}
+
 std::vector<Recorder *> Source::get_recorders() {
 
   std::vector<Recorder *> recorders;
@@ -500,7 +598,22 @@ std::vector<Recorder *> Source::get_recorders() {
     recorders.push_back((Recorder *)rx.get());
   }
 
+  for (std::vector<p25_recorder_sptr>::iterator it = digital_conv_recorders.begin(); it != digital_conv_recorders.end(); it++) {
+    p25_recorder_sptr rx = *it;
+    recorders.push_back((Recorder *)rx.get());
+  }
+
+  for (std::vector<dmr_recorder_sptr>::iterator it = dmr_conv_recorders.begin(); it != dmr_conv_recorders.end(); it++) {
+    dmr_recorder_sptr rx = *it;
+    recorders.push_back((Recorder *)rx.get());
+  }
+
   for (std::vector<analog_recorder_sptr>::iterator it = analog_recorders.begin(); it != analog_recorders.end(); it++) {
+    analog_recorder_sptr rx = *it;
+    recorders.push_back((Recorder *)rx.get());
+  }
+
+  for (std::vector<analog_recorder_sptr>::iterator it = analog_conv_recorders.begin(); it != analog_conv_recorders.end(); it++) {
     analog_recorder_sptr rx = *it;
     recorders.push_back((Recorder *)rx.get());
   }

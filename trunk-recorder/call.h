@@ -24,8 +24,6 @@ public:
   virtual ~Call(){};
   virtual long get_call_num() = 0;
   virtual void restart_call() = 0;
-  virtual void set_record_more_transmissions(bool more) = 0;
-  virtual void inactive_call() = 0;
   virtual void stop_call() = 0;
   virtual void conclude_call() = 0;
   virtual void set_sigmf_recorder(Recorder *r) = 0;
@@ -38,6 +36,7 @@ public:
   virtual int get_sys_num() = 0;
   virtual std::string get_short_name() = 0;
   virtual std::string get_capture_dir() = 0;
+  virtual std::string get_temp_dir() = 0;
   virtual void set_freq(double f) = 0;
   virtual long get_talkgroup() = 0;
 
@@ -46,6 +45,7 @@ public:
   virtual void increase_idle_count() = 0;
   virtual void reset_idle_count() = 0;
   virtual int since_last_update() = 0;
+  virtual double since_last_voice_update() = 0;
   virtual long elapsed() = 0;
 
   virtual double get_current_length() = 0;
@@ -56,6 +56,8 @@ public:
   virtual bool get_sigmf_recording() = 0;
   virtual void set_state(State s) = 0;
   virtual State get_state() = 0;
+  virtual void set_monitoring_state(MonitoringState s) = 0;
+  virtual MonitoringState get_monitoring_state() = 0;
   virtual void set_phase2_tdma(bool m) = 0;
   virtual bool get_phase2_tdma() = 0;
   virtual void set_tdma_slot(int s) = 0;
@@ -69,6 +71,9 @@ public:
   virtual bool get_encrypted() = 0;
   virtual void set_emergency(bool m) = 0;
   virtual bool get_emergency() = 0;
+  virtual int get_priority() = 0;
+  virtual bool get_mode() = 0;
+  virtual bool get_duplex() = 0;
   virtual std::string get_talkgroup_display() = 0;
   virtual void set_talkgroup_tag(std::string tag) = 0;
   virtual void clear_transmission_list() = 0;

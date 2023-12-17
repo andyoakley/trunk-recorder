@@ -11,13 +11,14 @@
 
 struct Broadcastify_System_Key {
   std::string api_key;
-  std::string system_id;
+  int system_id;
   std::string short_name;
 };
 
 struct Broadcastify_Uploader_Data {
   std::vector<Broadcastify_System_Key> keys;
   std::string bcfy_calls_server;
+  bool ssl_verify_disable;
 };
 
 class Broadcastify_Uploader : public Plugin_Api {
@@ -36,14 +37,14 @@ public:
     return "";
   }
 
-  std::string get_system_id(std::string short_name) {
+  int get_system_id(std::string short_name) {
     for (std::vector<Broadcastify_System_Key>::iterator it = data.keys.begin(); it != data.keys.end(); ++it) {
       Broadcastify_System_Key key = *it;
       if (key.short_name == short_name) {
-        return key.system_id;
+        return key.system_id; // Convert int to string for return
       }
     }
-    return "";
+    return 0;
   }
 
   static size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
@@ -66,7 +67,7 @@ public:
     }
 
     CURL *curl;
-    CURLcode res;
+    CURLcode res = CURLE_FAILED_INIT;
 
     struct curl_slist *headers = NULL;
 
@@ -121,9 +122,9 @@ public:
     std::string response_buffer;
 
     std::string api_key = get_api_key(call_info.short_name);
-    std::string system_id = get_system_id(call_info.short_name);
+    int system_id = get_system_id(call_info.short_name);
 
-    if ((api_key.size() ==0) || (system_id.size() ==0)) {
+    if ((api_key.size() == 0) || (system_id == 0)) {
       return 0;
     }
 
@@ -156,7 +157,7 @@ public:
     curl_formadd(&formpost,
                  &lastptr,
                  CURLFORM_COPYNAME, "systemId",
-                 CURLFORM_COPYCONTENTS, system_id.c_str(),
+                 CURLFORM_COPYCONTENTS, std::to_string(system_id).c_str(),
                  CURLFORM_END);
 
     curl_formadd(&formpost,
@@ -180,6 +181,12 @@ public:
 
       curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
       curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_buffer);
+
+      // broadcastify seems to make a habit out of letting their ssl certs expire
+      if (this->data.ssl_verify_disable) {
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+      }
 
       curl_multi_add_handle(multi_handle, curl);
 
@@ -278,9 +285,13 @@ public:
       std::string code = response_buffer.substr(0, spacepos);
       std::string message = response_buffer.substr(spacepos + 1);
 
-      if (code == "1" && message == "SKIPPED---ALREADY-RECEIVED-THIS-CALL") {
-        BOOST_LOG_TRIVIAL(info) << "[" << call_info.short_name << "]\tTG: " << call_info.talkgroup << "\tFreq: " << format_freq(call_info.freq) << "\tBroadcastify Upload Skipped: " << message;
-        return 0;
+      if (code == "1" && (message.rfind("SKIPPED", 0) == 0)) {
+          BOOST_LOG_TRIVIAL(info) << "[" << call_info.short_name << "]\tTG: " << call_info.talkgroup << "\tFreq: " << format_freq(call_info.freq) << "\tBroadcastify Upload Skipped: " << message;
+          return 0;
+      }
+      if (code == "1" && (message.rfind("REJECTED", 0) == 0)) {
+          BOOST_LOG_TRIVIAL(info) << "[" << call_info.short_name << "]\tTG: " << call_info.talkgroup << "\tFreq: " << format_freq(call_info.freq) << "\tBroadcastify Upload REJECTED: " << message;
+          return 0;
       }
 
       if (code != "0") {
@@ -309,16 +320,16 @@ public:
     return upload(call_info);
   }
 
-  int parse_config(boost::property_tree::ptree &cfg) {
+  int parse_config(json config_data) {
 
 
     // Tests to see if the uploadServer value exists in the config file
-    boost::optional<std::string> upload_server_exists = cfg.get_optional<std::string>("broadcastifyCallsServer");
+    bool upload_server_exists = config_data.contains("broadcastifyCallsServer");
     if (!upload_server_exists) {
       return 1;
     }
 
-    this->data.bcfy_calls_server = cfg.get<std::string>("broadcastifyCallsServer", "");
+    this->data.bcfy_calls_server = config_data.value("broadcastifyCallsServer", "");
     BOOST_LOG_TRIVIAL(info) << "Broadcastify Server: " << this->data.bcfy_calls_server;
 
     // from: http://www.zedwood.com/article/cpp-boost-url-regex
@@ -330,13 +341,18 @@ public:
       return 1;
     }
 
-    BOOST_FOREACH (boost::property_tree::ptree::value_type &node, cfg.get_child("systems")) {
-      boost::optional<boost::property_tree::ptree &> broadcastify_exists = node.second.get_child_optional("broadcastifyApiKey");
+    this->data.ssl_verify_disable = config_data.value("broadcastifySslVerifyDisable", false);
+    if (this->data.ssl_verify_disable) {
+      BOOST_LOG_TRIVIAL(info) << "Broadcastify SSL Verify Disabled";
+    }
+
+    for (json element : config_data["systems"]) {
+      bool broadcastify_exists = element.contains("broadcastifyApiKey");
       if (broadcastify_exists) {
         Broadcastify_System_Key key;
-        key.api_key = node.second.get<std::string>("broadcastifyApiKey", "");
-        key.system_id = node.second.get<std::string>("broadcastifySystemId", "");
-        key.short_name = node.second.get<std::string>("shortName", "");
+        key.api_key = element.value("broadcastifyApiKey", "");
+        key.system_id = element.value("broadcastifySystemId", 0);
+        key.short_name = element.value("shortName", "");
         BOOST_LOG_TRIVIAL(info) << "Uploading calls for: " << key.short_name;
         this->data.keys.push_back(key);
       }

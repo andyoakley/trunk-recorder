@@ -1,6 +1,8 @@
 #include "call_concluder.h"
 #include "../plugin_manager/plugin_manager.h"
 #include <boost/filesystem.hpp>
+#include <filesystem>
+namespace fs = std::filesystem;
 
 std::list<std::future<Call_Data_t>> Call_Concluder::call_data_workers = {};
 std::list<Call_Data_t> Call_Concluder::retry_call_list = {};
@@ -58,6 +60,9 @@ int create_call_json(Call_Data_t call_info) {
     json_file << "\"start_time\": " << call_info.start_time << ",\n";
     json_file << "\"stop_time\": " << call_info.stop_time << ",\n";
     json_file << "\"emergency\": " << call_info.emergency << ",\n";
+    json_file << "\"priority\": " << call_info.priority << ",\n";
+    json_file << "\"mode\": " << call_info.mode << ",\n";
+    json_file << "\"duplex\": " << call_info.duplex << ",\n";
     json_file << "\"encrypted\": " << call_info.encrypted << ",\n";
     json_file << "\"call_length\": " << call_info.length << ",\n";
     json_file << "\"talkgroup\": " << call_info.talkgroup << ",\n";
@@ -133,7 +138,33 @@ void remove_call_files(Call_Data_t call_info) {
         remove(t.filename);
       }
     }
-  } else if (!call_info.transmission_archive) {
+  } else {
+    if (call_info.transmission_archive) {
+      // if the files are being archived, move them to the capture directory
+      for (std::vector<Transmission>::iterator it = call_info.transmission_list.begin(); it != call_info.transmission_list.end(); ++it) {
+        Transmission t = *it;
+
+        // Only move transmission wavs if they exist
+        if (checkIfFile(t.filename)) {
+          
+          // Prevent "boost::filesystem::copy_file: Invalid cross-device link" errors by using std::filesystem if boost < 1.76
+          // This issue exists for old boost versions OR 5.x kernels
+          #if (BOOST_VERSION/100000) == 1 && ((BOOST_VERSION/100)%1000) < 76
+            fs::path target_file = fs::path(fs::path(call_info.filename ).replace_filename(fs::path(t.filename).filename()));
+            fs::path transmission_file = t.filename;      
+            fs::copy_file(transmission_file, target_file); 
+          #else
+            boost::filesystem::path target_file = boost::filesystem::path(fs::path(call_info.filename ).replace_filename(fs::path(t.filename).filename()));
+            boost::filesystem::path transmission_file = t.filename;
+            boost::filesystem::copy_file(transmission_file, target_file); 
+          #endif
+        //boost::filesystem::path target_file = boost::filesystem::path(call_info.filename).replace_filename(transmission_file.filename()); // takes the capture dir from the call file and adds the transmission filename to it
+        }
+
+      }
+    } 
+
+    // remove the transmission files from the temp directory
     for (std::vector<Transmission>::iterator it = call_info.transmission_list.begin(); it != call_info.transmission_list.end(); ++it) {
       Transmission t = *it;
       if (checkIfFile(t.filename)) {
@@ -141,6 +172,7 @@ void remove_call_files(Call_Data_t call_info) {
       }
     }
   }
+
   if (!call_info.call_log) {
     if (checkIfFile(call_info.status_filename)) {
       remove(call_info.status_filename);
@@ -156,17 +188,21 @@ Call_Data_t upload_call_worker(Call_Data_t call_info) {
     std::string shell_command_string;
     std::string files;
 
-    char formattedTalkgroup[62];
-    snprintf(formattedTalkgroup, 61, "%c[%dm%10ld%c[0m", 0x1B, 35, call_info.talkgroup, 0x1B);
-    std::string talkgroup_display = boost::lexical_cast<std::string>(formattedTalkgroup);
-
+    struct stat statbuf;
     // loop through the transmission list, pull in things to fill in totals for call_info
     // Using a for loop with iterator
     for (std::vector<Transmission>::iterator it = call_info.transmission_list.begin(); it != call_info.transmission_list.end(); ++it) {
       Transmission t = *it;
 
-      files.append(t.filename);
-      files.append(" ");
+      if (stat(t.filename, &statbuf) == 0)
+      {
+          files.append(t.filename);
+          files.append(" ");
+      }
+      else
+      {
+          BOOST_LOG_TRIVIAL(error) << "Somehow, " << t.filename << " doesn't exist, not attempting to provide it to sox";
+      }
     }
 
     combine_wav(files, call_info.filename);
@@ -213,19 +249,58 @@ Call_Data_t upload_call_worker(Call_Data_t call_info) {
   return call_info;
 }
 
+
+// static int rec_counter=0;
+Call_Data_t Call_Concluder::create_base_filename(Call *call, Call_Data_t call_info) {
+  char base_filename[255];
+  time_t work_start_time = call->get_start_time();
+  std::stringstream base_path_stream;
+  tm *ltm = localtime(&work_start_time);
+  // Found some good advice on Streams and Strings here: https://blog.sensecodons.com/2013/04/dont-let-stdstringstreamstrcstr-happen.html
+  base_path_stream << call->get_capture_dir() << "/" << call->get_short_name() << "/" << 1900 + ltm->tm_year << "/" << 1 + ltm->tm_mon << "/" << ltm->tm_mday;
+  std::string base_path_string = base_path_stream.str();
+  boost::filesystem::create_directories(base_path_string);
+
+  int nchars;
+
+  if (call->get_tdma_slot() == -1) {
+    nchars = snprintf(base_filename, 255, "%s/%ld-%ld_%.0f", base_path_string.c_str(), call->get_talkgroup(), work_start_time, call->get_freq());
+  } else {
+    // this is for the case when it is a P25P2 TDMA or DMR recorder and 2 wav files are created, the slot is needed to keep them separate.
+    nchars = snprintf(base_filename, 255, "%s/%ld-%ld_%.0f.%d", base_path_string.c_str(), call->get_talkgroup(), work_start_time, call->get_freq(), call->get_tdma_slot());
+  }
+  if (nchars >= 255) {
+    BOOST_LOG_TRIVIAL(error) << "Call: Path longer than 255 charecters";
+  }
+  snprintf(call_info.filename, 300, "%s-call_%lu.wav", base_filename, call->get_call_num());
+  snprintf(call_info.status_filename, 300, "%s-call_%lu.json", base_filename, call->get_call_num());
+  snprintf(call_info.converted, 300, "%s-call_%lu.m4a", base_filename, call->get_call_num());
+
+  return call_info;
+}
+
+
 Call_Data_t Call_Concluder::create_call_data(Call *call, System *sys, Config config) {
   Call_Data_t call_info;
   double total_length = 0;
 
+  call_info = create_base_filename(call, call_info);
+
   call_info.status = INITIAL;
   call_info.process_call_time = time(0);
   call_info.retry_attempt = 0;
+  call_info.error_count = 0;
+  call_info.spike_count = 0;
   call_info.freq = call->get_freq();
   call_info.encrypted = call->get_encrypted();
   call_info.emergency = call->get_emergency();
+  call_info.priority = call->get_priority();
+  call_info.mode = call->get_mode();
+  call_info.duplex = call->get_duplex();
   call_info.tdma_slot = call->get_tdma_slot();
   call_info.phase2_tdma = call->get_phase2_tdma();
   call_info.transmission_list = call->get_transmissions();
+  call_info.sys_num = sys->get_sys_num();
   call_info.short_name = sys->get_short_name();
   call_info.upload_script = sys->get_upload_script();
   call_info.audio_archive = sys->get_audio_archive();
@@ -234,7 +309,9 @@ Call_Data_t Call_Concluder::create_call_data(Call *call, System *sys, Config con
   call_info.call_num = call->get_call_num();
   call_info.compress_wav = sys->get_compress_wav();
   call_info.talkgroup = call->get_talkgroup();
+  call_info.talkgroup_display = call->get_talkgroup_display();
   call_info.patched_talkgroups = sys->get_talkgroup_patch(call_info.talkgroup);
+  call_info.min_transmissions_removed = 0;
 
   Talkgroup *tg = sys->find_talkgroup(call->get_talkgroup());
   if (tg != NULL) {
@@ -257,18 +334,17 @@ Call_Data_t Call_Concluder::create_call_data(Call *call, System *sys, Config con
     call_info.audio_type = "digital";
   }
 
+
   // loop through the transmission list, pull in things to fill in totals for call_info
   // Using a for loop with iterator
   for (std::vector<Transmission>::iterator it = call_info.transmission_list.begin(); it != call_info.transmission_list.end();) {
     Transmission t = *it;
-    char formattedTalkgroup[62];
 
     if (t.length < sys->get_min_tx_duration()) {
       if (!call_info.transmission_archive) {
 
-        snprintf(formattedTalkgroup, 61, "%c[%dm%10ld%c[0m", 0x1B, 35, call_info.talkgroup, 0x1B);
-        std::string talkgroup_display = boost::lexical_cast<std::string>(formattedTalkgroup);
-        BOOST_LOG_TRIVIAL(info) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << talkgroup_display << "\tFreq: " << format_freq(call_info.freq) << "\tRemoving transmission less than " << sys->get_min_tx_duration() << " seconds. Actual length: " << t.length << "." << std::endl;
+        BOOST_LOG_TRIVIAL(info) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << call_info.talkgroup_display << "\tFreq: " << format_freq(call_info.freq) << "\tRemoving transmission less than " << sys->get_min_tx_duration() << " seconds. Actual length: " << t.length << ".";
+        call_info.min_transmissions_removed++;
 
         if (checkIfFile(t.filename)) {
           remove(t.filename);
@@ -278,25 +354,34 @@ Call_Data_t Call_Concluder::create_call_data(Call *call, System *sys, Config con
       it = call_info.transmission_list.erase(it);
       continue;
     }
-    snprintf(formattedTalkgroup, 61, "%c[%dm%10ld%c[0m", 0x1B, 35, call_info.talkgroup, 0x1B);
-    std::string talkgroup_display = boost::lexical_cast<std::string>(formattedTalkgroup);
-    BOOST_LOG_TRIVIAL(info) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << talkgroup_display << "\tFreq: " << format_freq(call_info.freq) << "\t- Transmission src: " << t.source << " pos: " << total_length << " length: " << t.length;
+
+    std::string tag = sys->find_unit_tag(t.source);
+    std::string display_tag = "";
+    if (tag != "") {
+      display_tag = " (\033[0;34m" + tag + "\033[0m)";
+    }
+
+    std::stringstream transmission_info;
+    transmission_info << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << call_info.talkgroup_display << "\tFreq: " << format_freq(call_info.freq) << "\t- Transmission src: " << t.source << display_tag << " pos: " << format_time(total_length) << " length: " << format_time(t.length);
+
+    if (t.error_count < 1) {
+      BOOST_LOG_TRIVIAL(info) << transmission_info.str();
+    } else {
+      BOOST_LOG_TRIVIAL(info) << transmission_info.str() << "\033[0;31m errors: " << t.error_count << " spikes: " << t.spike_count << "\033[0m";
+    }
 
     if (it == call_info.transmission_list.begin()) {
       call_info.start_time = t.start_time;
-      snprintf(call_info.filename, 300, "%s-call_%lu.wav", t.base_filename, call_info.call_num);
-      snprintf(call_info.status_filename, 300, "%s-call_%lu.json", t.base_filename, call_info.call_num);
-      snprintf(call_info.converted, 300, "%s-call_%lu.m4a", t.base_filename, call_info.call_num);
     }
 
     if (std::next(it) == call_info.transmission_list.end()) {
       call_info.stop_time = t.stop_time;
     }
 
-    UnitTag *unit_tag = sys->find_unit_tag(t.source);
-    std::string tag = (unit_tag == NULL || unit_tag->tag.empty() ? "" : unit_tag->tag);
     Call_Source call_source = {t.source, t.start_time, total_length, false, "", tag};
     Call_Error call_error = {t.start_time, total_length, t.length, t.error_count, t.spike_count};
+    call_info.error_count = call_info.error_count + t.error_count;
+    call_info.spike_count = call_info.spike_count + t.spike_count;
     call_info.transmission_source_list.push_back(call_source);
     call_info.transmission_error_list.push_back(call_error);
 
@@ -310,23 +395,28 @@ Call_Data_t Call_Concluder::create_call_data(Call *call, System *sys, Config con
 }
 
 void Call_Concluder::conclude_call(Call *call, System *sys, Config config) {
-  char formattedTalkgroup[62];
-
   Call_Data_t call_info = create_call_data(call, sys, config);
 
-  snprintf(formattedTalkgroup, 61, "%c[%dm%10ld%c[0m", 0x1B, 35, call_info.talkgroup, 0x1B);
-  std::string talkgroup_display = boost::lexical_cast<std::string>(formattedTalkgroup);
-
-  if (call_info.transmission_list.size() == 0) {
-    BOOST_LOG_TRIVIAL(error) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << talkgroup_display << "\t Freq: " << call_info.freq << "\tNo Transmission were recorded!";
+  if(call->get_state() == MONITORING && call->get_monitoring_state() == SUPERSEDED){
+    BOOST_LOG_TRIVIAL(info) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << call_info.talkgroup_display << "\tFreq: " << format_freq(call_info.freq) << "\tCall has been superseded. Removing files.";
+    remove_call_files(call_info);
+    return;
+  }
+  else if (call_info.transmission_list.size()== 0 && call_info.min_transmissions_removed == 0) {
+    BOOST_LOG_TRIVIAL(error) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << call_info.talkgroup_display << "\t Freq: " << format_freq(call_info.freq) << "\tNo Transmissions were recorded!";
+    return;
+  }
+  else if (call_info.transmission_list.size() == 0 && call_info.min_transmissions_removed > 0) {
+    BOOST_LOG_TRIVIAL(info) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << call_info.talkgroup_display << "\t Freq: " << format_freq(call_info.freq) << "\tNo Transmissions were recorded! " << call_info.min_transmissions_removed << " tranmissions less than " << sys->get_min_tx_duration() << " seconds were removed.";
     return;
   }
 
   if (call_info.length <= sys->get_min_duration()) {
-    BOOST_LOG_TRIVIAL(error) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << talkgroup_display << "\t Freq: " << call_info.freq << "\t Call length: " << call_info.length << " is less than min duration: " << sys->get_min_duration();
+    BOOST_LOG_TRIVIAL(error) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m\tTG: " << call_info.talkgroup_display << "\t Freq: " << format_freq(call_info.freq) << "\t Call length: " << call_info.length << " is less than min duration: " << sys->get_min_duration();
     remove_call_files(call_info);
     return;
   }
+
 
   call_data_workers.push_back(std::async(std::launch::async, upload_call_worker, call_info));
 }
@@ -339,20 +429,17 @@ void Call_Concluder::manage_call_data_workers() {
 
       if (call_info.status == RETRY) {
         call_info.retry_attempt++;
-        char formattedTalkgroup[62];
-        snprintf(formattedTalkgroup, 61, "%c[%dm%10ld%c[0m", 0x1B, 35, call_info.talkgroup, 0x1B);
-        std::string talkgroup_display = boost::lexical_cast<std::string>(formattedTalkgroup);
         time_t start_time = call_info.start_time;
 
         if (call_info.retry_attempt > Call_Concluder::MAX_RETRY) {
           remove_call_files(call_info);
-          BOOST_LOG_TRIVIAL(error) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m Failed to conclude call - TG: " << talkgroup_display << "\t" << std::put_time(std::localtime(&start_time), "%c %Z");
+          BOOST_LOG_TRIVIAL(error) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m Failed to conclude call - TG: " << call_info.talkgroup_display << "\t" << std::put_time(std::localtime(&start_time), "%c %Z");
         } else {
           long jitter = rand() % 10;
           long backoff = (2 ^ call_info.retry_attempt * 60) + jitter;
           call_info.process_call_time = time(0) + backoff;
           retry_call_list.push_back(call_info);
-          BOOST_LOG_TRIVIAL(error) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m \tTG: " << talkgroup_display << "\t" << std::put_time(std::localtime(&start_time), "%c %Z") << " retry attempt " << call_info.retry_attempt << " in " << backoff << "s\t retry queue: " << retry_call_list.size() << " calls";
+          BOOST_LOG_TRIVIAL(error) << "[" << call_info.short_name << "]\t\033[0;34m" << call_info.call_num << "C\033[0m \tTG: " << call_info.talkgroup_display << "\t" << std::put_time(std::localtime(&start_time), "%c %Z") << " retry attempt " << call_info.retry_attempt << " in " << backoff << "s\t retry queue: " << retry_call_list.size() << " calls";
         }
       }
       it = call_data_workers.erase(it);

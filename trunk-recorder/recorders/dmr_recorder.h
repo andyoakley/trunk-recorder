@@ -26,7 +26,7 @@ typedef boost::shared_ptr<dmr_recorder> dmr_recorder_sptr;
 typedef std::shared_ptr<dmr_recorder> dmr_recorder_sptr;
 #endif
 
-dmr_recorder_sptr make_dmr_recorder(Source *src);
+dmr_recorder_sptr make_dmr_recorder(Source *src, Recorder_Type type);
 
 class dmr_recorder : virtual public gr::hier_block2, virtual public Recorder {
 
@@ -42,7 +42,6 @@ public:
   virtual void set_tdma(bool phase2) = 0;
   virtual void switch_tdma(bool phase2) = 0;
   virtual void set_tdma_slot(int slot) = 0;
-  virtual void set_record_more_transmissions(bool more) = 0;
   virtual double since_last_write() = 0;
   virtual void generate_arb_taps() = 0;
   virtual double get_current_length() = 0;

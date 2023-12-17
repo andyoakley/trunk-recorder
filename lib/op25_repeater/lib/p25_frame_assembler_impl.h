@@ -34,6 +34,7 @@
 #include "p25p1_fdma.h"
 #include "p25p2_tdma.h"
 #include "op25_audio.h"
+#include "log_ts.h"
 
 typedef std::deque<uint8_t> dibit_queue;
 
@@ -54,15 +55,14 @@ namespace gr {
 	gr::msg_queue::sptr d_msg_queue;
 
   int d_input_rate;
-  int d_sys_num;
   int d_silence_frames;
   int silence_frame_count;
   long total_produced;
   pmt::pmt_t d_tag_key;
   pmt::pmt_t d_tag_src;
-
   // internal functions
 
+    void send_grp_src_id();
     void set_xormask(const char*p) ;
     void set_nac(int nac) ;
     void set_slotid(int slotid) ;
@@ -75,14 +75,8 @@ namespace gr {
   void p25p2_queue_msg(int duid);
   void set_phase2_tdma(bool p);
 
- public:
-
-   virtual void forecast(int nof_output_items, gr_vector_int &nof_input_items_reqd);
-
-      // Nothing to declare in this block.
-
 public:
-      p25_frame_assembler_impl(int sys_num, int silence_frames, const char* udp_host, int port, int debug, bool do_imbe, bool do_output, bool do_msgq, gr::msg_queue::sptr queue, bool do_audio_output, bool do_phase2_tdma, bool do_nocrypt);
+      p25_frame_assembler_impl(int silence_frames, bool soft_vocoder, const char* udp_host, int port, int debug, bool do_imbe, bool do_output, bool do_msgq, gr::msg_queue::sptr queue, bool do_audio_output, bool do_phase2_tdma, bool do_nocrypt);
       ~p25_frame_assembler_impl();
 
       op25_audio op25audio;
@@ -96,6 +90,7 @@ public:
 
       void clear_silence_frame_count();
       void clear();
+      log_ts logts;
     };
 
   } // namespace op25_repeater

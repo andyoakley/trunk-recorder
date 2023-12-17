@@ -82,6 +82,8 @@ System_impl::System_impl(int sys_num) {
   sys_id = 0;
   wacn = 0;
   nac = 0;
+  sys_rfss = 0;
+  sys_site_id = 0;
   current_control_channel = 0;
   xor_mask_len = 0;
   xor_mask = NULL;
@@ -98,6 +100,8 @@ System_impl::System_impl(int sys_num) {
   d_tps_enabled = false;
   retune_attempts = 0;
   message_count = 0;
+  decode_rate = 0;
+  msg_queue = gr::msg_queue::make(100);
 }
 
 void System_impl::set_xor_mask(unsigned long sys_id, unsigned long wacn, unsigned long nac) {
@@ -122,7 +126,7 @@ bool System_impl::update_status(TrunkMessage message) {
     sys_id = message.sys_id;
     wacn = message.wacn;
     nac = message.nac;
-    BOOST_LOG_TRIVIAL(info) << "[" << short_name << "]\tDecoding System_impl ID "
+    BOOST_LOG_TRIVIAL(info) << "[" << short_name << "]\tDecoding System ID "
                             << std::hex << std::uppercase << message.sys_id << " WACN: "
                             << std::hex << std::uppercase << message.wacn << " NAC: " << std::hex << std::uppercase << message.nac;
     if (sys_id && wacn && nac) {
@@ -139,6 +143,23 @@ bool System_impl::update_status(TrunkMessage message) {
   return false;
 }
 
+bool System_impl::update_sysid(TrunkMessage message) {
+  if (!sys_rfss || !sys_site_id) {
+    sys_rfss = message.sys_rfss;
+    sys_site_id = message.sys_site_id;
+    BOOST_LOG_TRIVIAL(info) << "[" << short_name << "]\tDecoding System Site"
+                            << " RFSS: " << std::setw(3) << std::setfill('0') << message.sys_rfss
+                            << " SITE ID: " << std::setw(3) << std::setfill('0') << message.sys_site_id
+                            << " (" << std::setw(3) << std::setfill('0') << message.sys_rfss << "-" << std::setw(3) << std::setfill('0') << message.sys_site_id << ")";
+    return true;
+  }
+  return false;
+}
+
+ gr::msg_queue::sptr System_impl::get_msg_queue() {
+  return msg_queue;
+ }
+ 
 const char *System_impl::get_xor_mask() {
   return xor_mask;
 }
@@ -157,6 +178,14 @@ unsigned long System_impl::get_nac() {
 
 unsigned long System_impl::get_wacn() {
   return this->wacn;
+}
+
+int System_impl::get_sys_rfss(){
+  return this->sys_rfss;
+}
+
+int System_impl::get_sys_site_id(){
+  return this->sys_site_id;
 }
 
 bool System_impl::get_call_log() {
@@ -268,7 +297,10 @@ std::string System_impl::get_unit_tags_file() {
 void System_impl::set_channel_file(std::string channel_file) {
   BOOST_LOG_TRIVIAL(info) << "Loading Talkgroups...";
   this->channel_file = channel_file;
-  this->talkgroups->load_channels(channel_file);
+  this->talkgroups->load_channels(sys_num, channel_file);
+  for (auto& tg : this->get_talkgroups()) {
+    this->add_channel(tg->freq);
+  }
 }
 
 bool System_impl::has_channel_file() {
@@ -282,7 +314,7 @@ bool System_impl::has_channel_file() {
 void System_impl::set_talkgroups_file(std::string talkgroups_file) {
   BOOST_LOG_TRIVIAL(info) << "Loading Talkgroups...";
   this->talkgroups_file = talkgroups_file;
-  this->talkgroups->load_talkgroups(talkgroups_file);
+  this->talkgroups->load_talkgroups(sys_num, talkgroups_file);
 }
 
 void System_impl::set_unit_tags_file(std::string unit_tags_file) {
@@ -300,13 +332,13 @@ void System_impl::set_source(Source *s) {
 }
 
 Talkgroup *System_impl::find_talkgroup(long tg_number) {
-  return talkgroups->find_talkgroup(tg_number);
+  return talkgroups->find_talkgroup(sys_num, tg_number);
 }
 
 Talkgroup *System_impl::find_talkgroup_by_freq(double freq) {
-  return talkgroups->find_talkgroup_by_freq(freq);
+  return talkgroups->find_talkgroup_by_freq(sys_num, freq);
 }
-UnitTag *System_impl::find_unit_tag(long unitID) {
+std::string System_impl::find_unit_tag(long unitID) {
   return unit_tags->find_unit_tag(unitID);
 }
 
@@ -368,6 +400,15 @@ int System_impl::get_message_count() {
 void System_impl::set_message_count(int count) {
   message_count = count;
 }
+
+void System_impl::set_decode_rate(int rate) {
+  decode_rate = rate;
+}
+
+int System_impl::get_decode_rate() {
+  return decode_rate;
+}
+
 void System_impl::add_control_channel(double control_channel) {
   if (control_channels.size() == 0) {
     control_channels.push_back(control_channel);
@@ -590,4 +631,27 @@ void System_impl::clear_stale_talkgroup_patches() {
     }
     BOOST_LOG_TRIVIAL(debug) << "Active Patch of TGIDs" << printstring;
   }
+}
+
+bool System_impl::get_multiSite() {
+  return d_multiSite;
+}
+void System_impl::set_multiSite(bool multiSite) {
+  d_multiSite = multiSite;
+}
+
+std::string System_impl::get_multiSiteSystemName() {
+  return d_multiSiteSystemName;
+}
+
+void System_impl::set_multiSiteSystemName(std::string multiSiteSystemName) {
+  d_multiSiteSystemName = multiSiteSystemName;
+}
+
+unsigned long System_impl::get_multiSiteSystemNumber() {
+  return d_multiSiteSystemNumber;
+}
+
+void System_impl::set_multiSiteSystemNumber(unsigned long multiSiteSystemNumber) {
+  d_multiSiteSystemNumber = multiSiteSystemNumber;
 }

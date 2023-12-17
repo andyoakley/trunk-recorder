@@ -6,8 +6,8 @@
 #include "../plugin_manager/plugin_manager.h"
 #include <boost/log/trivial.hpp>
 
-dmr_recorder_sptr make_dmr_recorder(Source *src) {
-  dmr_recorder *recorder = new dmr_recorder_impl(src);
+dmr_recorder_sptr make_dmr_recorder(Source *src, Recorder_Type type) {
+  dmr_recorder *recorder = new dmr_recorder_impl(src, type);
 
   return gnuradio::get_initial_sptr(recorder);
 }
@@ -46,11 +46,11 @@ void dmr_recorder_impl::generate_arb_taps() {
   }
 }
 
-dmr_recorder_impl::dmr_recorder_impl(Source *src)
+dmr_recorder_impl::dmr_recorder_impl(Source *src, Recorder_Type type)
     : gr::hier_block2("dmr_recorder",
                       gr::io_signature::make(1, 1, sizeof(gr_complex)),
                       gr::io_signature::make(0, 0, sizeof(float))),
-      Recorder("DMR") {
+      Recorder(type) {
   initialize(src);
 }
 
@@ -160,6 +160,12 @@ void dmr_recorder_impl::initialize(Source *src) {
   recording_count = 0;
   recording_duration = 0;
 
+  bool use_streaming = false;
+
+  if (config != NULL) {
+    use_streaming = config->enable_audio_streaming;
+  }
+
   state = INACTIVE;
 
   timestamp = time(NULL);
@@ -218,10 +224,11 @@ void dmr_recorder_impl::initialize(Source *src) {
   rx_queue = gr::msg_queue::make(100);
   int verbosity = 0; // 10 = lots of debug messages
 
-  framer = gr::op25_repeater::frame_assembler::make(0, "file:///tmp/out1.raw", verbosity, 1, rx_queue);
+  framer = gr::op25_repeater::frame_assembler::make("file:///tmp/out1.raw", verbosity, 1, rx_queue);
   // op25_frame_assembler = gr::op25_repeater::p25_frame_assembler::make(0, silence_frames, udp_host, udp_port, verbosity, do_imbe, do_output, do_msgq, rx_queue, do_audio_output, do_tdma, do_nocrypt);
   levels = gr::blocks::multiply_const_ff::make(1);
-  plugin_sink = gr::blocks::plugin_wrapper_impl::make(std::bind(&dmr_recorder_impl::plugin_callback_handler, this, std::placeholders::_1, std::placeholders::_2));
+  plugin_sink_slot0 = gr::blocks::plugin_wrapper_impl::make(std::bind(&dmr_recorder_impl::plugin_callback_handler, this, std::placeholders::_1, std::placeholders::_2));
+  plugin_sink_slot1 = gr::blocks::plugin_wrapper_impl::make(std::bind(&dmr_recorder_impl::plugin_callback_handler, this, std::placeholders::_1, std::placeholders::_2));
 
   // Squelch DB
   // on a trunked network where you know you will have good signal, a carrier
@@ -241,10 +248,15 @@ void dmr_recorder_impl::initialize(Source *src) {
   connect(slicer, 0, framer, 0);
   connect(framer, 0, wav_sink_slot0, 0);
   connect(framer, 1, wav_sink_slot1, 0);
+
+  if (use_streaming) {
+    connect(framer, 0, plugin_sink_slot0, 0);
+    connect(framer, 1, plugin_sink_slot1, 0);
+  }
 }
 
 void dmr_recorder_impl::plugin_callback_handler(int16_t *samples, int sampleCount) {
-  // plugman_audio_callback(_recorder, samples, sampleCount);
+  plugman_audio_callback(call, this, samples, sampleCount);
 }
 
 void dmr_recorder_impl::switch_tdma(bool phase2) {
@@ -355,11 +367,6 @@ void dmr_recorder_impl::tune_offset(double f) {
   } else {
     lo->set_frequency(freq);
   }
-}
-
-void dmr_recorder_impl::set_record_more_transmissions(bool more) {
-
-  return wav_sink_slot0->set_record_more_transmissions(more);
 }
 
 bool compareTransmissions(Transmission t1, Transmission t2) {

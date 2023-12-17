@@ -26,8 +26,6 @@ public:
 
   long get_call_num();
   virtual void restart_call();
-  void set_record_more_transmissions(bool more);
-  void inactive_call();
   void stop_call();
   void conclude_call();
   void set_sigmf_recorder(Recorder *r);
@@ -40,6 +38,7 @@ public:
   int get_sys_num();
   std::string get_short_name();
   std::string get_capture_dir();
+  std::string get_temp_dir();
   void set_freq(double f);
   long get_talkgroup();
 
@@ -47,6 +46,7 @@ public:
   int get_idle_count();
   void increase_idle_count();
   void reset_idle_count();
+  double since_last_voice_update();
   int since_last_update();
   long elapsed();
 
@@ -58,6 +58,8 @@ public:
   bool get_sigmf_recording();
   void set_state(State s);
   State get_state();
+  void set_monitoring_state(MonitoringState s);
+  MonitoringState get_monitoring_state();
   void set_phase2_tdma(bool m);
   bool get_phase2_tdma();
   void set_tdma_slot(int s);
@@ -66,11 +68,14 @@ public:
   void set_is_analog(bool a);
   const char *get_xor_mask();
   virtual time_t get_start_time() { return start_time; }
-  virtual bool is_conventional() { return false; }
+  bool is_conventional() { return false; }
   void set_encrypted(bool m);
   bool get_encrypted();
   void set_emergency(bool m);
   bool get_emergency();
+  int get_priority();
+  bool get_mode();
+  bool get_duplex();
   std::string get_talkgroup_display();
   void set_talkgroup_tag(std::string tag);
   void clear_transmission_list();
@@ -86,6 +91,7 @@ public:
 
 protected:
   State state;
+  MonitoringState monitoringState;
   static long call_counter;
   long call_num;
   long talkgroup;
@@ -102,12 +108,13 @@ protected:
   time_t start_time;
   bool debug_recording;
   bool sigmf_recording;
+  bool was_update;
   bool encrypted;
   bool emergency;
   bool mode;
   bool duplex;
   bool is_analog;
-  long priority;
+  int priority;
   char filename[255];
   char transmission_filename[255];
   char converted_filename[255];

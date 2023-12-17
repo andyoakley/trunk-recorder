@@ -52,21 +52,21 @@ private:
   bool d_termination_flag;
   time_t d_start_time;
   time_t d_stop_time;
+  std::chrono::time_point<std::chrono::steady_clock> d_last_write_time;
   long d_spike_count;
   long d_error_count;
   long curr_src_id;
   long next_src_id;
   char current_filename[255];
-  char current_base_filename[255];
   Call *d_current_call;
   long d_current_call_num;
-  long d_current_call_recorder_num;
   std::string d_current_call_short_name;
-  std::string d_current_call_capture_dir;
+  std::string d_current_call_temp_dir;
   double d_current_call_freq;
   double d_prior_transmission_length;
   long d_current_call_talkgroup;
-  bool record_more_transmissions;
+  long d_current_call_talkgroup_encoded;
+  std::string d_current_call_talkgroup_display;
 
 protected:
   unsigned d_sample_count;
@@ -93,6 +93,7 @@ protected:
 protected:
   bool stop();
   bool open_internal(const char *filename);
+
   std::vector<Transmission> transmission_list;
   State state;
 
@@ -117,7 +118,7 @@ public:
                     unsigned int sample_rate,
                     int bits_per_sample);
   virtual ~transmission_sink();
-  void create_base_filename();
+  void create_filename();
   char *get_filename();
   bool start_recording(Call *call);
   bool start_recording(Call *call, int slot);
@@ -126,7 +127,6 @@ public:
   void set_source(long src);
   void set_sample_rate(unsigned int sample_rate);
   void set_bits_per_sample(int bits_per_sample);
-  void set_record_more_transmissions(bool more);
   void clear_transmission_list();
   std::vector<Transmission> get_transmission_list();
   void add_transmission(Transmission t);
@@ -142,6 +142,7 @@ public:
   State get_state();
   time_t get_start_time();
   time_t get_stop_time();
+  std::chrono::time_point<std::chrono::steady_clock> get_last_write_time();
 };
 
 } /* namespace blocks */

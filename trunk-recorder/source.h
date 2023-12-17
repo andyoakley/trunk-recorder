@@ -13,6 +13,9 @@
 #include "recorders/dmr_recorder.h"
 #include "recorders/p25_recorder.h"
 #include "recorders/sigmf_recorder.h"
+#include "sources/iq_file_source.h"
+#define JSON_DIAGNOSTICS 1
+#include <json.hpp>
 
 struct Gain_Stage_t {
   std::string stage_name;
@@ -50,9 +53,12 @@ class Source {
   Config *config;
 
   std::vector<p25_recorder_sptr> digital_recorders;
+  std::vector<p25_recorder_sptr> digital_conv_recorders;
   std::vector<debug_recorder_sptr> debug_recorders;
   std::vector<sigmf_recorder_sptr> sigmf_recorders;
   std::vector<analog_recorder_sptr> analog_recorders;
+  std::vector<analog_recorder_sptr> analog_conv_recorders;
+  std::vector<dmr_recorder_sptr> dmr_conv_recorders;
   std::vector<Gain_Stage_t> gain_stages;
   std::string driver;
   std::string device;
@@ -65,6 +71,9 @@ public:
   int get_num_available_analog_recorders();
   int get_num();
   Source(double c, double r, double e, std::string driver, std::string device, Config *cfg);
+  Source(std::string sigmf_meta, std::string sigmf_data, bool repeat, Config *cfg);
+  Source(std::string iq_file, bool repeat, double center, double rate, Config *cfg);
+  void set_iq_source(std::string iq_file, bool repeat, double center, double rate);
   gr::basic_block_sptr get_src_block();
   double get_min_hz();
   double get_max_hz();

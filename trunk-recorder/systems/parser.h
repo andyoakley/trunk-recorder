@@ -39,15 +39,19 @@ struct TrunkMessage {
   bool emergency;
   bool duplex;
   bool mode;
-  long priority;
+  int priority;
   int tdma_slot;
   bool phase2_tdma;
   long source;
   int sys_num;
   unsigned long sys_id;
+  int sys_rfss;
+  int sys_site_id;
   unsigned long nac;
   unsigned long wacn;
   PatchData patch_data;
+  unsigned long opcode;
+  
 };
 
 class TrunkParser {

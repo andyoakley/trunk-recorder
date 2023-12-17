@@ -45,6 +45,8 @@ class System_impl : public System {
   unsigned long sys_id;
   unsigned long wacn;
   unsigned long nac;
+  int sys_rfss;
+  int sys_site_id;
 
 public:
   Talkgroups *talkgroups;
@@ -62,6 +64,7 @@ public:
   std::string upload_script;
   int bcfy_system_id;
   int message_count;
+  int decode_rate;
   int retune_attempts;
   time_t last_message_time;
   std::string bandplan;
@@ -150,14 +153,17 @@ public:
   int get_max_dev();
   void set_filter_width(double f);
   double get_filter_width();
-
+  gr::msg_queue::sptr get_msg_queue();
   std::string get_system_type();
   unsigned long get_sys_id();
   unsigned long get_wacn();
   unsigned long get_nac();
+  int get_sys_rfss();
+  int get_sys_site_id();
   void set_xor_mask(unsigned long sys_id, unsigned long wacn, unsigned long nac);
   const char *get_xor_mask();
   bool update_status(TrunkMessage message);
+  bool update_sysid(TrunkMessage message);
   int get_sys_num();
   void set_system_type(std::string);
   std::string get_talkgroups_file();
@@ -166,7 +172,7 @@ public:
   void set_source(Source *);
   Talkgroup *find_talkgroup(long tg);
   Talkgroup *find_talkgroup_by_freq(double freq);
-  UnitTag *find_unit_tag(long unitID);
+  std::string find_unit_tag(long unitID);
   void set_talkgroups_file(std::string);
   void set_channel_file(std::string channel_file);
   bool has_channel_file();
@@ -174,6 +180,8 @@ public:
   int control_channel_count();
   int get_message_count();
   void set_message_count(int count);
+  int get_decode_rate();
+  void set_decode_rate(int rate);
   void add_control_channel(double channel);
   double get_next_control_channel();
   double get_current_control_channel();
@@ -188,6 +196,7 @@ public:
   std::vector<double> get_channels();
   std::vector<double> get_control_channels();
   std::vector<Talkgroup *> get_talkgroups();
+  gr::msg_queue::sptr msg_queue;
   System_impl(int sys_id);
   void set_bandplan(std::string);
   std::string get_bandplan();
@@ -218,10 +227,22 @@ public:
   void delete_talkgroup_patch(PatchData f_data);
   void clear_stale_talkgroup_patches();
 
+  bool get_multiSite();
+  void set_multiSite(bool multiSite);
+
+  std::string get_multiSiteSystemName();
+  void set_multiSiteSystemName(std::string multiSiteSystemName);
+
+  unsigned long get_multiSiteSystemNumber();
+  void set_multiSiteSystemNumber(unsigned long multiSiteSystemNumber);
+
 private:
   TalkgroupDisplayFormat talkgroup_display_format;
   bool d_hideEncrypted;
   bool d_hideUnknown;
+  bool d_multiSite;
+  std::string d_multiSiteSystemName;
+  unsigned long d_multiSiteSystemNumber;
 
   bool d_mdc_enabled;
   bool d_fsync_enabled;

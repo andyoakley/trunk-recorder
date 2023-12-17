@@ -38,6 +38,7 @@
 #include "p25_frame.h"
 #include "p25_framer.h"
 #include "rs.h"
+#include "p25_crypt_algs.h"
 #include "imbe_vocoder/imbe_vocoder.h"
 
 namespace gr {
@@ -197,7 +198,7 @@ namespace gr {
                 fprintf(stderr, "%s p25p1_fdma::set_nac: 0x%03x\n", logts.get(d_msgq_id), d_nac);
         }
 
-        p25p1_fdma::p25p1_fdma(int sys_num,const op25_audio& udp, int debug, bool do_imbe, bool do_output, bool do_msgq, gr::msg_queue::sptr queue, std::deque<int16_t> &output_queue, bool do_audio_output, bool do_nocrypt, int msgq_id) :
+        p25p1_fdma::p25p1_fdma(const op25_audio& udp, log_ts& logger, int debug, bool do_imbe, bool do_output, bool do_msgq, gr::msg_queue::sptr queue, std::deque<int16_t> &output_queue, bool do_audio_output, bool soft_vocoder, int msgq_id) :
             write_bufp(0),
             d_debug(debug),
             d_do_imbe(do_imbe),
@@ -205,18 +206,19 @@ namespace gr {
             d_do_msgq(do_msgq),
             d_msgq_id(msgq_id),
             d_do_audio_output(do_audio_output),
-            d_do_nocrypt(do_nocrypt),
             d_nac(0),
             d_msg_queue(queue),
+            d_soft_vocoder(soft_vocoder),
             output_queue(output_queue),
-            framer(new p25_framer(debug, msgq_id)),
+            framer(new p25_framer(logger, debug, msgq_id)),
             qtimer(op25_timer(TIMEOUT_THRESHOLD)),
             op25audio(udp),
+            logts(logger),
+            crypt_algs(logger, debug, msgq_id),
             ess_keyid(0),
             ess_algid(0x80),
             vf_tgid(0),
 			terminate_call(false),
-			d_sys_num(sys_num),
             p1voice_decode((debug > 0), udp, output_queue)
         {
 			rx_status.error_count = 0;
@@ -240,8 +242,17 @@ namespace gr {
 			return rx_status;
 		}
 
+        void p25p1_fdma::reset_call_terminated() {
+            terminate_call = false;
+        }
 		bool p25p1_fdma::get_call_terminated() {
 			return terminate_call;
+		}
+        long p25p1_fdma::get_curr_grp_id() {
+            long addr = curr_grp_id;
+            curr_grp_id = -1;
+            // This makes it easy to tell when a new Src Address has been received, all other times it will be -1
+			return addr;
 		}
 
 		long p25p1_fdma::get_curr_src_id() {
@@ -258,8 +269,6 @@ namespace gr {
             char wbuf[256];
             int p = 0;
             if (!d_do_msgq)
-                return;
-            if (d_msg_queue->full_p())
                 return;
             assert (len+2 <= (int)sizeof(wbuf));
             wbuf[p++] = (nac >> 8) & 0xff;
@@ -305,6 +314,7 @@ namespace gr {
                 ess_keyid = ((HB[j+2] & 0x03) << 14) + (HB[j+3] << 8) + (HB[j+4] << 2) + (HB[j+5] >> 4);	// 16 bit KeyId
                 vf_tgid   = ((HB[j+5] & 0x0f) << 12) + (HB[j+6] << 6) +  HB[j+7];				// 16 bit TGID
 
+                curr_grp_id = vf_tgid;
                 if (d_debug >= 10) {
                     fprintf (stderr, "ESS: tgid=%d, mfid=%x, algid=%x, keyid=%x, mi=%02x %02x %02x %02x %02x %02x %02x %02x %02x",
                             vf_tgid, MFID, ess_algid, ess_keyid,
@@ -344,10 +354,15 @@ namespace gr {
                 fprintf (stderr, "\n");
             }
 
-            process_voice(A);
+            process_voice(A, FT_LDU1);
         }
 
         void p25p1_fdma::process_LDU2(const bit_vector& A) {
+            uint16_t next_keyid;
+            uint8_t  next_algid;
+            uint8_t  next_mi[9] = {0};
+            bool next_ess_valid = false;
+
             if (d_debug >= 10) {
                 fprintf (stderr, "%s NAC 0x%03x LDU2: ", logts.get(d_msgq_id), framer->nac);
             }
@@ -358,28 +373,38 @@ namespace gr {
             int i, j, ec;
             ec = rs8.decode(HB); // Reed Solomon (24,16,9) error correction
             if ((ec >= 0) && (ec <= 4)) {	// upper limit of 4 corrections
-                j = 39;												// 72 bit MI
+                j = 39;                                                             // 72 bit MI
                 for (i = 0; i < 9;) {
-                    ess_mi[i++] = (uint8_t)  (HB[j  ]         << 2) + (HB[j+1] >> 4);
-                    ess_mi[i++] = (uint8_t) ((HB[j+1] & 0x0f) << 4) + (HB[j+2] >> 2);
-                    ess_mi[i++] = (uint8_t) ((HB[j+2] & 0x03) << 6) +  HB[j+3];
+                    next_mi[i++] = (uint8_t)  (HB[j  ]         << 2) + (HB[j+1] >> 4);
+                    next_mi[i++] = (uint8_t) ((HB[j+1] & 0x0f) << 4) + (HB[j+2] >> 2);
+                    next_mi[i++] = (uint8_t) ((HB[j+2] & 0x03) << 6) +  HB[j+3];
                     j += 4;
                 }
-                ess_algid =  (HB[j  ]         <<  2) + (HB[j+1] >> 4);					// 8 bit AlgId
-                ess_keyid = ((HB[j+1] & 0x0f) << 12) + (HB[j+2] << 6) + HB[j+3];			// 16 bit KeyId
+                next_algid =  (HB[j  ]         <<  2) + (HB[j+1] >> 4);             //  8 bit AlgId
+                next_keyid = ((HB[j+1] & 0x0f) << 12) + (HB[j+2] << 6) + HB[j+3];   // 16 bit KeyId
+                next_ess_valid = true;
 
                 if (d_debug >= 10) {
                     fprintf (stderr, "ESS: algid=%x, keyid=%x, mi=%02x %02x %02x %02x %02x %02x %02x %02x %02x, rs_errs=%d\n",
-                            ess_algid, ess_keyid,
-                            ess_mi[0], ess_mi[1], ess_mi[2], ess_mi[3], ess_mi[4], ess_mi[5],ess_mi[6], ess_mi[7], ess_mi[8],
+                            next_algid, next_keyid,
+                            next_mi[0], next_mi[1], next_mi[2], next_mi[3], next_mi[4], next_mi[5], next_mi[6], next_mi[7], next_mi[8],
                             ec); 
                 }
             }
-            process_voice(A);
+
+            process_voice(A, FT_LDU2);
+
+            // replace existing ess with newly received data now that voice processing is complete
+            if (next_ess_valid) {
+                ess_algid = next_algid;
+                ess_keyid = next_keyid;
+                memcpy(ess_mi, next_mi, sizeof(next_mi));
+            }
         }
 
         void p25p1_fdma::process_TTDU() {
             process_duid(framer->duid, framer->nac, NULL, 0);
+            reset_ess();
 
             if ((d_do_imbe || d_do_audio_output) && (framer->duid == 0x3 || framer->duid == 0xf)) {  // voice termination
                 op25audio.send_audio_flag(op25_audio::DRAIN);
@@ -467,6 +492,7 @@ namespace gr {
                             uint32_t srcaddr = (lcw[6] << 16) + (lcw[7] << 8) + lcw[8];
 
                             curr_src_id = srcaddr;
+                            curr_grp_id = grpaddr;
                             s = "{\"srcaddr\" : " + std::to_string(srcaddr) + ", \"grpaddr\": " + std::to_string(grpaddr) + "}";
                             send_msg(s, -3);
                             if (d_debug >= 10)
@@ -500,6 +526,8 @@ namespace gr {
                             uint16_t grpaddr = (lcw[3] << 8) + lcw[4];
                             uint16_t ch_T    = (lcw[5] << 8) + lcw[6];
                             uint16_t ch_R    = (lcw[7] << 8) + lcw[8];
+
+                            // Don't use this grpaddr, you can get Updates for Talkgroups that are on other frequencies, the GRP here may not be the one the being recordered
                             if (d_debug >= 10)
                                 fprintf(stderr, ", svcopts=0x%02x, grpaddr=%d, ch_T=%d, ch_R=%d", svcopts, grpaddr, ch_T, ch_R);
                             tsbk[0] = 0xff; tsbk[1] = 0xff;
@@ -624,13 +652,17 @@ namespace gr {
             return (bl_cnt > 0) ? 0 : -1;
         }
 
-        void p25p1_fdma::process_voice(const bit_vector& A) {
+        void p25p1_fdma::process_voice(const bit_vector& A, const frame_type fr_type) {
             if (d_do_imbe || d_do_audio_output) {
+                if (encrypted())
+                    crypt_algs.prepare(ess_algid, ess_keyid, PT_P25_PHASE1, ess_mi);
+
                 for(size_t i = 0; i < nof_voice_codewords; ++i) {
                     voice_codeword cw(voice_codeword_sz);
                     uint32_t E0, ET;
                     uint32_t u[8];
                     char s[128];
+                    bool audio_valid = !encrypted();
                     size_t errs = 0;
                     imbe_deinterleave(A, cw, i);
                     uint16_t imbe_error = 0;
@@ -645,6 +677,14 @@ namespace gr {
                                 p_cw[6], p_cw[7], p_cw[8], p_cw[9], p_cw[10]);
                         fprintf(stderr, "%s IMBE %s errs %lu\n", logts.get(d_msgq_id), s, errs); // print to log in one operation
                     }
+
+                    if (encrypted()) {
+                        packed_codeword ciphertext;
+                        imbe_pack(ciphertext, u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7]);
+                        audio_valid = crypt_algs.process(ciphertext, fr_type, i);
+                        imbe_unpack(ciphertext, u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7]);
+                    }
+
 
 					imbe_error = (uint16_t) errs;	 
 					// this section calculates if the IMBE Error is greater than std deviation. If so it adds to spike count
@@ -683,35 +723,33 @@ namespace gr {
 					sprintf(s, "%03x %03x %03x %03x %03x %03x %03x %03x\n", u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7]);
 
                     if (d_do_audio_output) {
-                        if (!d_do_nocrypt || !encrypted()) {
-                            std::string encr = "{\"encrypted\": " + std::to_string(0) + ", \"algid\": " + std::to_string(ess_algid) + ", \"keyid\": " + std::to_string(ess_keyid) + "}";
-                            send_msg(encr, M_P25_JSON_DATA);
+                        if ( !encrypted()) {
                             // This is the Vocoder that OP25 currently uses.
-                            /*software_decoder.decode_fullrate(u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], E0, ET);
-                            audio_samples *samples = software_decoder.audio();
-                            for (int i=0; i < SND_FRAME; i++) {
-                           	    if (samples->size() > 0) {
-                       		        snd[i] = (int16_t)(samples->front());
-                                    samples->pop_front();
-                                } else {
-                                    snd[i] = 0;
+
+                            if (d_soft_vocoder) {
+                                // This is vocoder that is for half-rate
+                                software_decoder.decode_fullrate(u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], E0, ET);
+                                audio_samples *samples = software_decoder.audio();
+                                for (int i=0; i < SND_FRAME; i++) {
+                                    if (samples->size() > 0) {
+                                        snd[i] = (int16_t)(samples->front());
+                                        samples->pop_front();
+                                    } else {
+                                        snd[i] = 0;
+                                    }
                                 }
-                            }*/
+                            } else {
 
-                            // This is the older, fullrate vocoder
-                            // it was copied from p25p1_voice_decode.cc
-                            int16_t frame_vector[8];
+                                // This is the older, fullrate vocoder
+                                // it was copied from p25p1_voice_decode.cc
+                                int16_t frame_vector[8];
 
-                            for (int i=0; i < 8; i++) { // Ugh. For compatibility convert imbe params from uint32_t to int16_t
-                                frame_vector[i] = u[i];
+                                for (int i=0; i < 8; i++) { // Ugh. For compatibility convert imbe params from uint32_t to int16_t
+                                    frame_vector[i] = u[i];
+                                }
+                                frame_vector[7] >>= 1;
+                                vocoder.imbe_decode(frame_vector, snd);
                             }
-                            frame_vector[7] >>= 1;
-                            vocoder.imbe_decode(frame_vector, snd);
-
-
-
-
-
 
                             if (op25audio.enabled()) {      // decoded audio goes out via UDP (normal code path)
                                 op25audio.send_audio(snd, SND_FRAME * sizeof(int16_t));
@@ -722,7 +760,7 @@ namespace gr {
                             }
                         } else {
                             std::string encr = "{\"encrypted\": " + std::to_string(1) + ", \"algid\": " + std::to_string(ess_algid) + ", \"keyid\": " + std::to_string(ess_keyid) + "}";
-                            send_msg(encr, M_P25_JSON_DATA);
+                            //send_msg(encr, M_P25_JSON_DATA);
                         }
                     }
 
@@ -740,13 +778,28 @@ namespace gr {
             qtimer.reset();
         }
 
+        void p25p1_fdma::call_end() {
+            if (d_do_audio_output)
+                op25audio.send_audio_flag(op25_audio::DRAIN);
+            reset_ess();
+        }
+
+        void p25p1_fdma::crypt_reset() {
+            crypt_algs.reset();
+        }
+
+        void p25p1_fdma::crypt_key(uint16_t keyid, uint8_t algid, const std::vector<uint8_t> &key) {
+            crypt_algs.key(keyid, algid, key);
+        }
+
         void p25p1_fdma::send_msg(const std::string msg_str, long msg_type) {
-            if (!d_do_msgq || d_msg_queue->full_p())
+            if (!d_do_msgq)
                 return;
-            
-            gr::message::sptr msg = gr::message::make_from_string(msg_str, msg_type, d_sys_num, 0);     
-            //gr::message::sptr msg = gr::message::make_from_string(msg_str, get_msg_type(PROTOCOL_P25, msg_type), d_sys_num, 0);
-            d_msg_queue->insert_tail(msg);
+
+            gr::message::sptr msg = gr::message::make_from_string(msg_str, msg_type);     
+
+            if (!d_msg_queue->full_p())
+                d_msg_queue->insert_tail(msg);
         }
 
         void p25p1_fdma::process_frame() {
@@ -838,7 +891,7 @@ namespace gr {
 
         // Check for timer expiry
         void p25p1_fdma::check_timeout() {
-            if (d_do_msgq && !d_msg_queue->full_p()) {
+            if (d_do_msgq) {
                 // check for timeout
                 if (qtimer.expired()) {
                     if (d_debug >= 10)
@@ -850,7 +903,8 @@ namespace gr {
 
                     qtimer.reset();
                     gr::message::sptr msg = gr::message::make(get_msg_type(PROTOCOL_P25, M_P25_TIMEOUT), (d_msgq_id << 1), logts.get_ts());
-                    d_msg_queue->insert_tail(msg);
+                    if (!d_msg_queue->full_p())
+                        d_msg_queue->insert_tail(msg);
                 }
             }
         }
